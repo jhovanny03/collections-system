@@ -3,7 +3,8 @@ import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import ClientList from './ClientList';
 import CreateClient from './CreateClient';
-import ClientDashboard from './ClientDashboard';
+import ClientDashboard from './ClientDashboard/ClientDashboard';
+
 
 function MainView() {
   const [view, setView] = useState('create');
