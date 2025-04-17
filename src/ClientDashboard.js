@@ -1,8 +1,10 @@
+// New isolated section for Invoice Setup in Client Dashboard
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import db from './firebase';
 import { doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import InvoiceSection from './InvoiceSection';
 
 function ClientDashboard() {
   const { clientId } = useParams();
@@ -14,8 +16,6 @@ function ClientDashboard() {
   const [reducedAmount, setReducedAmount] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentDate, setPaymentDate] = useState('');
-  const [invoiceInput, setInvoiceInput] = useState('');
-  const [initialPaymentInput, setInitialPaymentInput] = useState('');
 
   useEffect(() => {
     const fetchClient = async () => {
@@ -53,25 +53,6 @@ function ClientDashboard() {
       communicationLogs: [...(prev.communicationLogs || []), newLog]
     }));
     setLogEntry('');
-  };
-
-  const handleSaveInvoiceAndInitialPayment = async () => {
-    const invoice = parseFloat(invoiceInput);
-    const initial = parseFloat(initialPaymentInput);
-    if (!invoice || !initial) return;
-    const clientRef = doc(db, 'clients', clientId);
-    const newPayment = { amount: initial, date: new Date().toISOString(), recordedAt: new Date().toISOString() };
-    await updateDoc(clientRef, {
-      invoiceTotal: invoice,
-      payments: arrayUnion(newPayment)
-    });
-    setClient(prev => ({
-      ...prev,
-      invoiceTotal: invoice,
-      payments: [...(prev.payments || []), newPayment]
-    }));
-    setInvoiceInput('');
-    setInitialPaymentInput('');
   };
 
   const handleSaveArrangement = async () => {
@@ -128,7 +109,7 @@ function ClientDashboard() {
   const paymentsLeft = Math.ceil(remainingBalance / monthlyInstallment);
 
   const calculateDueMonths = () => {
-    const startDate = new Date('2023-01-15');
+    const startDate = client?.firstInstallmentDate ? new Date(client.firstInstallmentDate) : new Date('2023-01-15');
     const today = new Date();
     const paidMonths = Math.floor(totalPaid / monthlyInstallment);
     const dueMonths = [];
@@ -166,26 +147,7 @@ function ClientDashboard() {
         <p><strong>Expected Due Months:</strong> {dueMonths.length ? dueMonths.join(', ') : 'None'}</p>
       </div>
 
-      <div style={{ marginBottom: '2rem' }}>
-        <h3>Setup Invoice and Initial Payment</h3>
-        <input
-          type="number"
-          placeholder="Invoice Total"
-          value={invoiceInput}
-          onChange={(e) => setInvoiceInput(e.target.value)}
-          style={{ width: '100%', marginBottom: '8px', padding: '8px' }}
-        />
-        <input
-          type="number"
-          placeholder="Initial Payment"
-          value={initialPaymentInput}
-          onChange={(e) => setInitialPaymentInput(e.target.value)}
-          style={{ width: '100%', marginBottom: '8px', padding: '8px' }}
-        />
-        <button onClick={handleSaveInvoiceAndInitialPayment} style={{ padding: '8px 16px', backgroundColor: '#6f42c1', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-          Save Invoice & Initial Payment
-        </button>
-      </div>
+      <InvoiceSection client={client} setClient={setClient} />
 
       <div style={{ marginBottom: '2rem' }}>
         <h3>Payment Arrangement</h3>
