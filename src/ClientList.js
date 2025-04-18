@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import db from './firebase';
 import { collection, getDocs, doc, deleteDoc } from 'firebase/firestore';
 import EditClient from './EditClient';
+import ReportingSummary from './ReportingSummary';
 
 function ClientList() {
   const [clients, setClients] = useState([]);
@@ -44,8 +45,8 @@ function ClientList() {
     if (search.trim()) {
       filtered = filtered.filter(
         client =>
-          client.firstName.toLowerCase().includes(search.toLowerCase()) ||
-          client.lastName.toLowerCase().includes(search.toLowerCase())
+          client.firstName?.toLowerCase().includes(search.toLowerCase()) ||
+          client.lastName?.toLowerCase().includes(search.toLowerCase())
       );
     }
 
@@ -74,7 +75,53 @@ function ClientList() {
   const paginatedClients = () => {
     const sorted = sortedClients();
     const startIndex = (currentPage - 1) * clientsPerPage;
-    return sorted.slice(startIndex, startIndex + clientsPerPage);
+    return sorted.slice(startIndex, startIndex + clientsPerPage).map(client => {
+      const monthlyInstallment = client.installmentAmount || 500;
+
+      let startDate = null;
+      const raw = client.firstInstallmentDate;
+
+      if (raw?.seconds) {
+        startDate = new Date(raw.seconds * 1000);
+      } else if (typeof raw === 'string' || raw instanceof String) {
+        startDate = new Date(raw);
+      }
+
+      if (!startDate || isNaN(startDate)) {
+        return {
+          ...client,
+          computedAmountDue: 0,
+          computedPastDueLabel: "-"
+        };
+      }
+
+      const today = new Date();
+      const payments = (client.payments || []).filter(p => new Date(p.date) >= startDate);
+      const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+
+      const monthsSinceStart = Math.floor(
+        (today.getFullYear() - startDate.getFullYear()) * 12 +
+        (today.getMonth() - startDate.getMonth()) + 1
+      );
+
+      const paidMonths = Math.floor(totalPaid / monthlyInstallment);
+      const missedMonths = Math.max(0, monthsSinceStart - paidMonths);
+      const amountDue = missedMonths * monthlyInstallment;
+
+      const startMonth = new Date(startDate);
+      const endMonth = new Date(startDate);
+      endMonth.setMonth(startMonth.getMonth() + missedMonths - 1);
+
+      const pastDueLabel = missedMonths === 0
+        ? <span style={tagGreen}>Current</span>
+        : `${startMonth.toLocaleString('default', { month: 'long' })} ${startMonth.getFullYear()} – ${endMonth.toLocaleString('default', { month: 'long' })} ${endMonth.getFullYear()}`;
+
+      return {
+        ...client,
+        computedAmountDue: amountDue,
+        computedPastDueLabel: pastDueLabel
+      };
+    });
   };
 
   const totalPages = Math.ceil(sortedClients().length / clientsPerPage);
@@ -98,6 +145,8 @@ function ClientList() {
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1200px', margin: 'auto' }}>
+      <ReportingSummary />
+
       <h2>Client List</h2>
 
       <div style={{ position: 'relative', display: 'inline-block', marginBottom: '20px' }}>
@@ -132,31 +181,6 @@ function ClientList() {
         )}
       </div>
 
-      <div style={{
-        backgroundColor: '#f8f9fa',
-        padding: '15px',
-        border: '1px solid #ddd',
-        borderRadius: '6px',
-        marginBottom: '20px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '1rem'
-      }}>
-        <div><strong>Total Clients:</strong> {clients.length}</div>
-        <div><strong>Visible Clients:</strong> {sortedClients().length}</div>
-        <div><strong>Total Amount Owed:</strong> ${clients.reduce((acc, c) => acc + (parseFloat(c.amountDue) || 0), 0).toFixed(2)}</div>
-        <div>
-          <label>Clients Per Page: </label>
-          <select value={clientsPerPage} onChange={e => { setClientsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
-            <option value={5}>5</option>
-            <option value={10}>10</option>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-          </select>
-        </div>
-      </div>
-
       {editingClient && (
         <EditClient
           client={editingClient}
@@ -172,7 +196,7 @@ function ClientList() {
             <th style={th}>Case Type</th>
             <th style={th} onClick={() => requestSort('caseStatus')}>Case Status{getSortIndicator('caseStatus')}</th>
             <th style={th}>MyCase Link</th>
-            <th style={th} onClick={() => requestSort('amountDue')}>Amount Due{getSortIndicator('amountDue')}</th>
+            <th style={th}>Amount Due</th>
             <th style={th}>Months Past Due</th>
             <th style={th}>Last Payment Date</th>
             <th style={th}>Payment Notes</th>
@@ -182,7 +206,7 @@ function ClientList() {
         <tbody>
           {paginatedClients().map(client => (
             <tr key={client.id}>
-              <td style={td} colSpan={1}>
+              <td style={td}>
                 <a href={`/client/${client.id}`} style={{ color: '#007bff', textDecoration: 'underline', cursor: 'pointer' }}>
                   {client.firstName} {client.lastName}
                 </a>
@@ -192,11 +216,11 @@ function ClientList() {
                   </span>
                 )}
               </td>
-              <td style={td}>{client.caseType}</td>
-              <td style={td}>{client.caseStatus}</td>
+              <td style={td}>{client.caseType || '-'}</td>
+              <td style={td}>{client.caseStatus || '-'}</td>
               <td style={td}><a href={client.myCaseLink} target="_blank" rel="noreferrer">View</a></td>
-              <td style={td}>${parseFloat(client.amountDue || 0).toFixed(2)}</td>
-              <td style={td}>{(parseFloat(client.amountDue || 0) === 0 && !client.monthsPastDue) ? <span style={tagGreen}>Current</span> : client.monthsPastDue || '-'}</td>
+              <td style={td}>${(client.computedAmountDue || 0).toLocaleString()}</td>
+              <td style={td}>{client.computedPastDueLabel}</td>
               <td style={td}>{client.lastPaymentDate || '-'}</td>
               <td style={td}>{client.paymentNotes || '-'}</td>
               <td style={td}>

@@ -2,30 +2,52 @@ import React, { useState } from 'react';
 import { doc, updateDoc } from 'firebase/firestore';
 import db from '../firebase';
 
-export default function RecordPayment({ clientId, client, setClient }) {
+function RecordPayment({ client, setClient }) {
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentDate, setPaymentDate] = useState('');
 
   const handleRecordPayment = async () => {
     if (!paymentAmount || !paymentDate) return;
+
     const newPayment = {
       amount: parseFloat(paymentAmount),
       date: paymentDate,
       recordedAt: new Date().toISOString()
     };
-    const clientRef = doc(db, 'clients', clientId);
+
     const updatedPayments = [...(client.payments || []), newPayment];
-    await updateDoc(clientRef, {
+
+    const updates = {
       payments: updatedPayments
-    });
-    setClient(prev => ({ ...prev, payments: updatedPayments }));
+    };
+
+    // ✅ Check if this payment fulfills a paymentPromise
+    if (client.paymentPromise) {
+      const promisedDate = new Date(client.paymentPromise.date);
+      const actualDate = new Date(paymentDate);
+      const promisedAmount = parseFloat(client.paymentPromise.amount);
+
+      if (actualDate <= promisedDate && newPayment.amount >= promisedAmount) {
+        updates.paymentPromise = null; // Auto-clear the promise
+      }
+    }
+
+    const clientRef = doc(db, 'clients', client.id);
+    await updateDoc(clientRef, updates);
+
+    setClient(prev => ({
+      ...prev,
+      payments: updatedPayments,
+      ...(updates.paymentPromise === null ? { paymentPromise: null } : {})
+    }));
+
     setPaymentAmount('');
     setPaymentDate('');
   };
 
   return (
     <div style={{ marginBottom: '2rem' }}>
-      <h3>Record Payment</h3>
+      <h3>💳 Record Payment</h3>
       <input
         type="date"
         value={paymentDate}
@@ -41,7 +63,14 @@ export default function RecordPayment({ clientId, client, setClient }) {
       />
       <button
         onClick={handleRecordPayment}
-        style={{ padding: '8px 16px', backgroundColor: '#28a745', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+        style={{
+          padding: '8px 16px',
+          backgroundColor: '#28a745',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '4px',
+          cursor: 'pointer'
+        }}
       >
         Record Payment
       </button>
@@ -52,7 +81,7 @@ export default function RecordPayment({ clientId, client, setClient }) {
           <ul style={{ paddingLeft: '1rem' }}>
             {client.payments.map((p, index) => (
               <li key={index}>
-                ${p.amount.toFixed(2)} on {new Date(p.date).toLocaleDateString()}
+                ${p.amount.toLocaleString()} on {new Date(p.date).toLocaleDateString()}
               </li>
             ))}
           </ul>
@@ -61,3 +90,5 @@ export default function RecordPayment({ clientId, client, setClient }) {
     </div>
   );
 }
+
+export default RecordPayment;

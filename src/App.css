@@ -1,3 +1,6 @@
+/* Import react-calendar styles */
+@import 'react-calendar/dist/Calendar.css';
+
 /* src/App.css */
 .App input,
 .App select {
@@ -21,4 +24,3 @@
 .App button:hover {
   background-color: #0056b3;
 }
-
