@@ -1,26 +1,81 @@
-/* Import react-calendar styles */
-@import 'react-calendar/dist/Calendar.css';
+/* Global base styling */
+body {
+  font-family: 'Poppins', sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #f4f6f8;
+  color: #333;
+}
 
-/* src/App.css */
-.App input,
-.App select {
+/* Form inputs */
+input,
+select,
+textarea {
   display: block;
   margin-bottom: 1rem;
-  padding: 0.5rem;
+  padding: 0.6rem 1rem;
   width: 100%;
   border: 1px solid #ccc;
-  border-radius: 4px;
+  border-radius: 6px;
+  font-size: 16px;
+  background-color: white;
+  font-family: 'Poppins', sans-serif;
 }
 
-.App button {
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #4e54c8;
+  outline: none;
+}
+
+/* Buttons */
+button {
   padding: 0.6rem 1.2rem;
-  background-color: #007bff;
+  background-color: #4e54c8;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
+  font-size: 15px;
   cursor: pointer;
+  transition: background-color 0.2s ease;
+  font-family: 'Poppins', sans-serif;
 }
 
-.App button:hover {
-  background-color: #0056b3;
+button:hover {
+  background-color: #3c40a0;
+}
+
+/* Utility Classes */
+.text-center {
+  text-align: center;
+}
+
+.section {
+  margin-bottom: 2rem;
+}
+
+/* Calendar tiles (react-calendar default override for cleaner look) */
+.react-calendar {
+  border: none;
+  border-radius: 10px;
+  font-family: 'Poppins', sans-serif;
+  background-color: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.react-calendar__tile--now {
+  background: #e3e4ff;
+  border-radius: 6px;
+}
+
+.react-calendar__tile--active {
+  background: #4e54c8 !important;
+  color: white !important;
+  border-radius: 6px;
+}
+
+.react-calendar__tile:hover {
+  background: #ddd;
+  border-radius: 6px;
 }
