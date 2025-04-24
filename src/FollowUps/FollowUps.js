@@ -1,3 +1,4 @@
+// src/FollowUps/FollowUps.js
 import React, { useEffect, useState } from "react";
 import {
   Box,
@@ -11,6 +12,11 @@ import {
   Paper,
 } from "@mui/material";
 import { format, isAfter } from "date-fns";
+import { doc, updateDoc } from "firebase/firestore";
+import db from "../firebase";
+import FollowUpScheduler from "./FollowUpScheduler";
+import { shouldTriggerRecurringFollowUp } from "./FollowUpCycle";
+import FollowUpNotes from "./FollowUpNotes";
 
 const FollowUps = ({ clients, updateClientCommunication }) => {
   const [clientsNeedingFollowUp, setClientsNeedingFollowUp] = useState([]);
@@ -63,7 +69,9 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
       const wasContactedAfterCutoff =
         lastContactDate && isAfter(lastContactDate, cutoffDate);
 
-      return isPastDue && !wasContactedAfterCutoff;
+      const dueByNextFollowUp = shouldTriggerRecurringFollowUp(client, today);
+
+      return (isPastDue && !wasContactedAfterCutoff) || dueByNextFollowUp;
     });
 
     setClientsNeedingFollowUp(filteredClients);
@@ -87,10 +95,29 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
     );
   };
 
+  const updateFollowUpDate = async (clientId, newDate) => {
+    try {
+      const clientRef = doc(db, "clients", clientId);
+      await updateDoc(clientRef, {
+        nextFollowUpDate: newDate,
+      });
+
+      setClientsNeedingFollowUp((prev) =>
+        prev.map((client) =>
+          client.id === clientId
+            ? { ...client, nextFollowUpDate: newDate }
+            : client
+        )
+      );
+    } catch (error) {
+      console.error("Error updating next follow-up date:", error);
+    }
+  };
+
   return (
     <Box p={3}>
       <Typography variant="h4" gutterBottom>
-        🔁 Follow-Ups After 16th
+        📌 Outstanding Client Follow-Ups
       </Typography>
       <Paper elevation={3}>
         <Table>
@@ -108,14 +135,20 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
               <TableCell>
                 <strong>MyCase</strong>
               </TableCell>
+              <TableCell>
+                <strong>Next Follow-Up</strong>
+              </TableCell>
               <TableCell>Last Contact</TableCell>
+              <TableCell>
+                <strong>Note</strong>
+              </TableCell>
               <TableCell>Action</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {clientsNeedingFollowUp.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8}>
+                <TableCell colSpan={10}>
                   🎉 All follow-ups are complete for this month!
                 </TableCell>
               </TableRow>
@@ -188,9 +221,18 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
                       )}
                     </TableCell>
                     <TableCell>
+                      <FollowUpScheduler
+                        client={client}
+                        updateFollowUpDate={updateFollowUpDate}
+                      />
+                    </TableCell>
+                    <TableCell>
                       {lastLog && !isNaN(lastLog.getTime())
                         ? format(lastLog, "MMMM d, yyyy")
                         : "No contact yet"}
+                    </TableCell>
+                    <TableCell>
+                      <FollowUpNotes clientId={client.id} />
                     </TableCell>
                     <TableCell>
                       <Button
