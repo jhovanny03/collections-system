@@ -13,8 +13,11 @@ import {
   Select,
   FormControl,
   InputLabel,
+  Snackbar,
+  Alert as MuiAlert,
 } from "@mui/material";
 import { generateFilledLetter } from "./generateFilledLetter";
+import WarningLetterGenerator from "./WarningLetterGenerator";
 
 const LetterGenerator = ({ client }) => {
   const [formData, setFormData] = useState({
@@ -37,24 +40,76 @@ const LetterGenerator = ({ client }) => {
   const [subType, setSubType] = useState("");
   const [refundLevel, setRefundLevel] = useState("");
   const [open, setOpen] = useState(false);
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: "",
+    severity: "warning",
+  });
 
-  const today = new Date().toLocaleDateString();
+  const formatDateLong = (date) =>
+    new Date(date).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+
+  const formatMoney = (value) =>
+    `$${parseFloat(value || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+    })}`;
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
+  const showSnackbar = (message, severity = "warning") => {
+    setSnackbar({ open: true, message, severity });
+  };
+
   const getTemplateFile = () => {
-    if (subType === "noRefund")
-      return "/templates/TerminationLetterTemplate.docx";
-    if (subType === "withRefund" && refundLevel === "partial")
-      return "/templates/TerminationLetter_PartialRefund.docx";
-    if (subType === "withRefund" && refundLevel === "full")
-      return "/templates/TerminationLetter_FullRefund.docx";
+    if (letterType === "termination") {
+      if (subType === "noRefund")
+        return "/templates/TerminationLetterTemplate.docx";
+      if (subType === "withRefund" && refundLevel === "partial")
+        return "/templates/TerminationLetter_PartialRefund.docx";
+      if (subType === "withRefund" && refundLevel === "full")
+        return "/templates/TerminationLetter_FullRefund.docx";
+    }
     return null;
   };
 
+  const validateFields = () => {
+    const required = [
+      "clientAddress",
+      "clientCityStateZip",
+      "clientPhone",
+      "clientEmail",
+      "retainerDate",
+      "amountPaid",
+      "hoursWorked",
+      "valueOfWork",
+      "expenses",
+      "refundAmount",
+    ];
+
+    if (subType === "noRefund") {
+      required.push("missedDates", "warningDate", "amountOwed");
+    }
+
+    const missing = required.filter((key) => !formData[key]);
+    if (missing.length > 0) {
+      showSnackbar(
+        `Please complete all required fields: ${missing.join(", ")}`,
+        "warning"
+      );
+      return false;
+    }
+    return true;
+  };
+
   const handleGenerateDocx = async () => {
+    if (!validateFields()) return;
+
     try {
       const templatePath = getTemplateFile();
       if (!templatePath) throw new Error("No template selected");
@@ -64,48 +119,46 @@ const LetterGenerator = ({ client }) => {
 
       const values = {
         clientName: `${client.firstName} ${client.lastName}`,
+        caseType: client.caseType || "[Case Type]",
         clientAddress: formData.clientAddress,
         clientCityStateZip: formData.clientCityStateZip,
         clientPhone: formData.clientPhone,
         clientEmail: formData.clientEmail,
-        caseType: client.caseType || "[Case Type]",
-        today,
         retainerDate: formData.retainerDate,
+        today: formatDateLong(new Date()),
         missedDates: formData.missedDates,
         warningDate: formData.warningDate,
-        amountPaid: formData.amountPaid,
+        amountPaid: formatMoney(formData.amountPaid),
         hoursWorked: formData.hoursWorked,
-        valueOfWork: formData.valueOfWork,
-        expenses: formData.expenses,
-        refundAmount: formData.refundAmount,
-        amountOwed: formData.amountOwed,
+        valueOfWork: formatMoney(formData.valueOfWork),
+        expenses: formatMoney(formData.expenses),
+        refundAmount: formatMoney(formData.refundAmount),
+        amountOwed: formatMoney(formData.amountOwed),
       };
 
-      const filename = `${client.lastName}_Termination_Letter_${subType}_${
+      const filename = `${client.lastName}_${letterType}_Letter_${subType}_${
         refundLevel || "none"
       }.docx`;
       await generateFilledLetter(templateBuffer, values, filename);
-      setOpen(false);
+      showSnackbar("Letter generated successfully!", "success");
+      handleClose();
     } catch (err) {
       console.error("Error loading template or generating letter:", err);
-
-      if (err.properties && Array.isArray(err.properties.errors)) {
-        const errorMessages = err.properties.errors
-          .map((e) => e.properties.explanation)
-          .join("\n");
-        console.error("Template rendering errors:\n", errorMessages);
-      }
-
-      alert(
-        "There was an error generating the letter. Check the console for details."
-      );
+      showSnackbar("There was an error generating the letter.", "error");
     }
   };
 
-  const shouldShowModal =
-    subType === "noRefund" ||
-    (subType === "withRefund" &&
-      (refundLevel === "partial" || refundLevel === "full"));
+  const handleClose = () => {
+    setOpen(false);
+    setSubType("");
+    setRefundLevel("");
+  };
+
+  const shouldShowTerminationModal =
+    letterType === "termination" &&
+    (subType === "noRefund" ||
+      (subType === "withRefund" &&
+        (refundLevel === "partial" || refundLevel === "full")));
 
   return (
     <Paper sx={{ p: 3, mt: 4, borderRadius: "12px" }}>
@@ -123,55 +176,56 @@ const LetterGenerator = ({ client }) => {
               setLetterType(e.target.value);
               setSubType("");
               setRefundLevel("");
+              setOpen(false);
             }}
           >
             <MenuItem value="termination">Termination Letters</MenuItem>
-            <MenuItem value="warning" disabled>
-              Warning Letter (coming soon)
-            </MenuItem>
+            <MenuItem value="warning">Warning Letter</MenuItem>
           </Select>
         </FormControl>
 
         {letterType === "termination" && (
-          <FormControl fullWidth>
-            <InputLabel>Template</InputLabel>
-            <Select
-              value={subType}
-              label="Template"
-              onChange={(e) => {
-                setSubType(e.target.value);
-                setRefundLevel("");
-                if (e.target.value === "noRefund") setOpen(true);
-              }}
-            >
-              <MenuItem value="noRefund">No Refund</MenuItem>
-              <MenuItem value="withRefund">With Refund</MenuItem>
-            </Select>
-          </FormControl>
-        )}
+          <>
+            <FormControl fullWidth>
+              <InputLabel>Template</InputLabel>
+              <Select
+                value={subType}
+                label="Template"
+                onChange={(e) => {
+                  setSubType(e.target.value);
+                  setRefundLevel("");
+                  if (e.target.value === "noRefund") setOpen(true);
+                }}
+              >
+                <MenuItem value="noRefund">No Refund</MenuItem>
+                <MenuItem value="withRefund">With Refund</MenuItem>
+              </Select>
+            </FormControl>
 
-        {subType === "withRefund" && (
-          <FormControl fullWidth>
-            <InputLabel>Refund Type</InputLabel>
-            <Select
-              value={refundLevel}
-              label="Refund Type"
-              onChange={(e) => {
-                setRefundLevel(e.target.value);
-                setOpen(true);
-              }}
-            >
-              <MenuItem value="partial">Partial Refund</MenuItem>
-              <MenuItem value="full">Full Refund</MenuItem>
-            </Select>
-          </FormControl>
+            {subType === "withRefund" && (
+              <FormControl fullWidth>
+                <InputLabel>Refund Type</InputLabel>
+                <Select
+                  value={refundLevel}
+                  label="Refund Type"
+                  onChange={(e) => {
+                    setRefundLevel(e.target.value);
+                    setOpen(true);
+                  }}
+                >
+                  <MenuItem value="partial">Partial Refund</MenuItem>
+                  <MenuItem value="full">Full Refund</MenuItem>
+                </Select>
+              </FormControl>
+            )}
+          </>
         )}
       </Box>
 
-      {/* Pop-up Modal for Letter Form */}
+      {/* Termination Modal */}
       <Dialog
-        open={open && shouldShowModal}
-        onClose={() => setOpen(false)}
+        open={shouldShowTerminationModal}
+        onClose={handleClose}
         fullWidth
         maxWidth="md"
       >
@@ -220,18 +274,22 @@ const LetterGenerator = ({ client }) => {
               fullWidth
               onChange={handleChange}
             />
-            <TextField
-              name="missedDates"
-              label="Missed Payment Dates (comma separated)"
-              fullWidth
-              onChange={handleChange}
-            />
-            <TextField
-              name="warningDate"
-              label="Date of Warning Letter"
-              fullWidth
-              onChange={handleChange}
-            />
+            {subType === "noRefund" && (
+              <TextField
+                name="missedDates"
+                label="Missed Payment Dates (comma separated)"
+                fullWidth
+                onChange={handleChange}
+              />
+            )}
+            {subType === "noRefund" && (
+              <TextField
+                name="warningDate"
+                label="Date of Warning Letter"
+                fullWidth
+                onChange={handleChange}
+              />
+            )}
             <TextField
               name="amountPaid"
               label="Amount Paid"
@@ -262,21 +320,50 @@ const LetterGenerator = ({ client }) => {
               fullWidth
               onChange={handleChange}
             />
-            <TextField
-              name="amountOwed"
-              label="Amount Owed to Firm (if any)"
-              fullWidth
-              onChange={handleChange}
-            />
+            {subType === "noRefund" && (
+              <TextField
+                name="amountOwed"
+                label="Amount Owed to Firm (if any)"
+                fullWidth
+                onChange={handleChange}
+              />
+            )}
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancel</Button>
+          <Button onClick={handleClose}>Cancel</Button>
           <Button variant="contained" onClick={handleGenerateDocx}>
-            Generate Word Document
+            GENERATE LETTER
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Warning Letter Component */}
+      {letterType === "warning" && (
+        <WarningLetterGenerator
+          client={client}
+          open={true}
+          onClose={() => setLetterType("")}
+        />
+      )}
+
+      {/* Snackbar */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <MuiAlert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: "100%" }}
+          elevation={6}
+          variant="filled"
+        >
+          {snackbar.message}
+        </MuiAlert>
+      </Snackbar>
     </Paper>
   );
 };
