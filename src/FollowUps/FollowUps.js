@@ -11,7 +11,7 @@ import {
   Button,
   Paper,
 } from "@mui/material";
-import { format, isAfter } from "date-fns";
+import { format } from "date-fns";
 import { doc, updateDoc } from "firebase/firestore";
 import db from "../firebase";
 import FollowUpScheduler from "./FollowUpScheduler";
@@ -22,17 +22,20 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
   const [clientsNeedingFollowUp, setClientsNeedingFollowUp] = useState([]);
 
   useEffect(() => {
-    const today = new Date();
+    filterClients();
+  }, [clients]);
+
+  const filterClients = () => {
+    const today = new Date(new Date().toDateString());
     const cutoffDate = new Date(today.getFullYear(), today.getMonth(), 16);
 
     const filteredClients = clients.filter((client) => {
       const firstRaw = client.firstInstallmentDate;
       if (!firstRaw) return false;
 
-      const firstInstallmentDate = firstRaw.seconds
+      const firstInstallmentDate = firstRaw?.seconds
         ? new Date(firstRaw.seconds * 1000)
         : new Date(firstRaw);
-
       if (isNaN(firstInstallmentDate.getTime())) return false;
 
       const monthly = Number(client.installmentAmount || 500);
@@ -59,7 +62,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
 
       const logs = client.communicationLog || client.communicationLogs || [];
       const validDates = logs
-        .map((log) => new Date(log.date))
+        .map((log) => new Date(log.timestamp || log.date))
         .filter((d) => !isNaN(d.getTime()));
 
       const lastContactDate = validDates.length
@@ -67,32 +70,20 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
         : null;
 
       const wasContactedAfterCutoff =
-        lastContactDate && isAfter(lastContactDate, cutoffDate);
+        lastContactDate && lastContactDate > cutoffDate;
 
-      const dueByNextFollowUp = shouldTriggerRecurringFollowUp(client, today);
+      const nextFollowUp = client.nextFollowUpDate
+        ? new Date(new Date(client.nextFollowUpDate).toDateString())
+        : null;
 
-      return (isPastDue && !wasContactedAfterCutoff) || dueByNextFollowUp;
+      const needsFollowUp =
+        (isPastDue && !wasContactedAfterCutoff && !nextFollowUp) ||
+        (isPastDue && nextFollowUp && nextFollowUp <= today);
+
+      return needsFollowUp;
     });
 
     setClientsNeedingFollowUp(filteredClients);
-  }, [clients]);
-
-  const handleMarkContacted = (clientId) => {
-    const now = new Date();
-    const newEntry = {
-      date: now.toISOString(),
-      user: "System",
-      content: `Follow-up marked complete for this month – ${format(
-        now,
-        "MMMM yyyy"
-      )}`,
-    };
-
-    updateClientCommunication(clientId, newEntry);
-
-    setClientsNeedingFollowUp((prev) =>
-      prev.filter((client) => client.id !== clientId)
-    );
   };
 
   const updateFollowUpDate = async (clientId, newDate) => {
@@ -100,15 +91,10 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
       const clientRef = doc(db, "clients", clientId);
       await updateDoc(clientRef, {
         nextFollowUpDate: newDate,
+        lastFollowUpContactDate: new Date().toISOString(),
       });
 
-      setClientsNeedingFollowUp((prev) =>
-        prev.map((client) =>
-          client.id === clientId
-            ? { ...client, nextFollowUpDate: newDate }
-            : client
-        )
-      );
+      filterClients(); // Re-run filter to remove client if follow-up moved
     } catch (error) {
       console.error("Error updating next follow-up date:", error);
     }
@@ -142,13 +128,12 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
               <TableCell>
                 <strong>Note</strong>
               </TableCell>
-              <TableCell>Action</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {clientsNeedingFollowUp.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10}>
+                <TableCell colSpan={9}>
                   🎉 All follow-ups are complete for this month!
                 </TableCell>
               </TableRow>
@@ -193,7 +178,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
                   client.communicationLogs ||
                   []
                 )
-                  .map((log) => new Date(log.date))
+                  .map((log) => new Date(log.timestamp || log.date))
                   .filter((d) => !isNaN(d.getTime()))
                   .sort((a, b) => b - a)[0];
 
@@ -233,14 +218,6 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
                     </TableCell>
                     <TableCell>
                       <FollowUpNotes clientId={client.id} />
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="contained"
-                        onClick={() => handleMarkContacted(client.id)}
-                      >
-                        ✅ Mark Contacted
-                      </Button>
                     </TableCell>
                   </TableRow>
                 );

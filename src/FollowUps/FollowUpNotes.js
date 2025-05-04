@@ -11,13 +11,18 @@ const FollowUpNotes = ({ clientId }) => {
 
   const handleSaveNote = async () => {
     if (!note.trim()) return;
+    if (!clientId) {
+      console.error("clientId is missing. Cannot save follow-up note.");
+      return;
+    }
+
     setLoading(true);
     try {
       const now = new Date();
       const entry = {
-        date: now.toISOString(),
-        user: "System", // Replace later with actual user context if needed
-        content: note.trim(),
+        timestamp: now.toISOString(), // ✅ Fixed field name
+        user: "System",
+        message: note.trim(), // ✅ Fixed field name
       };
 
       const clientRef = doc(db, "clients", clientId);
