@@ -15,6 +15,7 @@ import CreateClient from "./CreateClient";
 import ClientDashboard from "./ClientDashboard/ClientDashboard";
 import PromisedPaymentCalendar from "./PromisedPaymentCalendar";
 import FollowUps from "./FollowUps/FollowUps";
+import Dashboard from "./Dashboard/Dashboard"; // ✅ FIXED PATH
 
 function MainView({ clients }) {
   const [view, setView] = useState("create");
@@ -39,6 +40,9 @@ function MainView({ clients }) {
           style={{ ...buttonStyle, textDecoration: "none" }}
         >
           🔁 Follow Ups
+        </a>
+        <a href="/dashboard" style={{ ...buttonStyle, textDecoration: "none" }}>
+          📊 Dashboard
         </a>
       </div>
       {view === "create" && <CreateClient />}
@@ -75,7 +79,6 @@ function App() {
         communicationLog: arrayUnion(newEntry),
       });
 
-      // Update UI immediately
       setClients((prevClients) =>
         prevClients.map((client) =>
           client.id === clientId
@@ -112,6 +115,8 @@ function App() {
             />
           }
         />
+        <Route path="/dashboard" element={<Dashboard />} />{" "}
+        {/* ✅ DASHBOARD ROUTE */}
       </Routes>
     </Router>
   );
