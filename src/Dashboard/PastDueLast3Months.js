@@ -18,9 +18,9 @@ const PastDueLast3Months = () => {
   ];
 
   return (
-    <Card>
+    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
           Past Due Last 3 Months
         </Typography>
         <ResponsiveContainer width="100%" height={300}>

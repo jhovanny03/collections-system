@@ -1,6 +1,6 @@
-// src/App.js
-import React, { useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { ThemeProvider, createTheme, CssBaseline, Box } from "@mui/material";
 import {
   collection,
   getDocs,
@@ -10,49 +10,20 @@ import {
 } from "firebase/firestore";
 import db from "./firebase";
 
+import Sidebar from "./Layout/Sidebar";
+import DarkModeToggle from "./Layout/DarkModeToggle";
+import PageTransition from "./Layout/PageTransition";
+
 import ClientList from "./ClientList";
 import CreateClient from "./CreateClient";
 import ClientDashboard from "./ClientDashboard/ClientDashboard";
 import PromisedPaymentCalendar from "./PromisedPaymentCalendar";
 import FollowUps from "./FollowUps/FollowUps";
-import Dashboard from "./Dashboard/Dashboard"; // ✅ FIXED PATH
-
-function MainView({ clients }) {
-  const [view, setView] = useState("create");
-
-  return (
-    <div className="App" style={{ padding: "2rem" }}>
-      <div style={{ marginBottom: "2rem" }}>
-        <button onClick={() => setView("create")} style={buttonStyle}>
-          ➕ Create Client
-        </button>
-        <button onClick={() => setView("view")} style={buttonStyle}>
-          📄 View Clients
-        </button>
-        <a
-          href="/promised-payments"
-          style={{ ...buttonStyle, textDecoration: "none" }}
-        >
-          📅 Promised Payments
-        </a>
-        <a
-          href="/follow-ups"
-          style={{ ...buttonStyle, textDecoration: "none" }}
-        >
-          🔁 Follow Ups
-        </a>
-        <a href="/dashboard" style={{ ...buttonStyle, textDecoration: "none" }}>
-          📊 Dashboard
-        </a>
-      </div>
-      {view === "create" && <CreateClient />}
-      {view === "view" && <ClientList clients={clients} />}
-    </div>
-  );
-}
+import Dashboard from "./Dashboard/Dashboard";
 
 function App() {
   const [clients, setClients] = useState([]);
+  const [mode, setMode] = useState("light");
 
   useEffect(() => {
     const fetchClients = async () => {
@@ -63,7 +34,6 @@ function App() {
           ...doc.data(),
         }));
         setClients(data);
-        console.log("Fetched clients:", data);
       } catch (error) {
         console.error("Error fetching clients:", error);
       }
@@ -97,38 +67,74 @@ function App() {
     }
   };
 
+  const theme = useMemo(
+    () =>
+      createTheme({
+        palette: {
+          mode,
+          primary: { main: "#6366f1" },
+          secondary: { main: "#f43f5e" },
+          background: {
+            default: mode === "light" ? "#f4f4f5" : "#18181b",
+            paper: mode === "light" ? "#ffffff" : "#27272a",
+          },
+          text: {
+            primary: mode === "light" ? "#111827" : "#f9fafb",
+            secondary: mode === "light" ? "#6b7280" : "#d1d5db",
+          },
+        },
+        shape: { borderRadius: 16 },
+        typography: {
+          fontFamily: "'Poppins', 'Roboto', 'Arial', sans-serif",
+          h4: { fontWeight: 600 },
+          subtitle2: { fontWeight: 500 },
+        },
+      }),
+    [mode]
+  );
+
+  const toggleColorMode = () => {
+    setMode((prevMode) => (prevMode === "light" ? "dark" : "light"));
+  };
+
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<MainView clients={clients} />} />
-        <Route path="/client/:clientId" element={<ClientDashboard />} />
-        <Route
-          path="/promised-payments"
-          element={<PromisedPaymentCalendar />}
-        />
-        <Route
-          path="/follow-ups"
-          element={
-            <FollowUps
-              clients={clients}
-              updateClientCommunication={updateClientCommunication}
-            />
-          }
-        />
-        <Route path="/dashboard" element={<Dashboard />} />{" "}
-        {/* ✅ DASHBOARD ROUTE */}
-      </Routes>
-    </Router>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Router>
+        <Box sx={{ display: "flex" }}>
+          <Sidebar />
+          <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+            <DarkModeToggle mode={mode} toggleColorMode={toggleColorMode} />
+            <PageTransition>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route
+                  path="/clients"
+                  element={<ClientList clients={clients} />}
+                />
+                <Route path="/create-client" element={<CreateClient />} />
+                <Route path="/client/:clientId" element={<ClientDashboard />} />
+                <Route
+                  path="/promised-payments"
+                  element={<PromisedPaymentCalendar />}
+                />
+                <Route
+                  path="/follow-ups"
+                  element={
+                    <FollowUps
+                      clients={clients}
+                      updateClientCommunication={updateClientCommunication}
+                    />
+                  }
+                />
+                <Route path="/dashboard" element={<Dashboard />} />
+              </Routes>
+            </PageTransition>
+          </Box>
+        </Box>
+      </Router>
+    </ThemeProvider>
   );
 }
-
-const buttonStyle = {
-  marginRight: "1rem",
-  padding: "0.6rem 1.2rem",
-  borderRadius: "4px",
-  border: "1px solid #ccc",
-  backgroundColor: "#f8f8f8",
-  cursor: "pointer",
-};
 
 export default App;

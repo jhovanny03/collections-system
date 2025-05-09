@@ -11,9 +11,9 @@ const CasesByStatus = () => {
   const COLORS = ["#3b82f6", "#10b981", "#f59e0b"];
 
   return (
-    <Card>
+    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
           Cases by Status
         </Typography>
         <ResponsiveContainer width="100%" height={300}>

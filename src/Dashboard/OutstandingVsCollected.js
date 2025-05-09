@@ -17,9 +17,9 @@ const OutstandingVsCollected = () => {
   const COLORS = ["#f43f5e", "#10b981"];
 
   return (
-    <Card>
+    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
           Outstanding vs Collected
         </Typography>
         <ResponsiveContainer width="100%" height={300}>

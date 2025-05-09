@@ -1,4 +1,5 @@
 import React from "react";
+import { Container, Grid, Typography } from "@mui/material";
 import SummaryCards from "./SummaryCards";
 import AmountByCaseType from "./AmountByCaseType";
 import CasesByStatus from "./CasesByStatus";
@@ -10,27 +11,51 @@ import OutstandingVsCollected from "./OutstandingVsCollected";
 
 const Dashboard = () => {
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-3xl font-bold text-center">Collections Dashboard</h1>
+    <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+      <Typography variant="h4" gutterBottom>
+        Collections Dashboard
+      </Typography>
 
-      <SummaryCards />
+      {/* Summary Cards Row */}
+      <Grid container spacing={3}>
+        <Grid item xs={12} sm={6} md={4}>
+          <SummaryCards />
+        </Grid>
+      </Grid>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <AmountByCaseType />
-        <CasesByStatus />
-      </div>
+      {/* Charts Row 1 */}
+      <Grid container spacing={3} sx={{ mt: 2 }}>
+        <Grid item xs={12} sm={6} md={4}>
+          <AmountByCaseType />
+        </Grid>
+        <Grid item xs={12} sm={6} md={4}>
+          <CasesByStatus />
+        </Grid>
+        <Grid item xs={12} sm={6} md={4}>
+          <PaymentsOverTime />
+        </Grid>
+      </Grid>
 
-      <PaymentsOverTime />
+      {/* Charts Row 2 */}
+      <Grid container spacing={3} sx={{ mt: 2 }}>
+        <Grid item xs={12} sm={6} md={4}>
+          <PastDueLast3Months />
+        </Grid>
+        <Grid item xs={12} sm={6} md={4}>
+          <PaymentsLast3Months />
+        </Grid>
+        <Grid item xs={12} sm={6} md={4}>
+          <ExpectedPayments />
+        </Grid>
+      </Grid>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <PastDueLast3Months />
-        <PaymentsLast3Months />
-      </div>
-
-      <ExpectedPayments />
-
-      <OutstandingVsCollected />
-    </div>
+      {/* Final Chart Row */}
+      <Grid container spacing={3} sx={{ mt: 2 }}>
+        <Grid item xs={12} sm={6} md={4}>
+          <OutstandingVsCollected />
+        </Grid>
+      </Grid>
+    </Container>
   );
 };
 

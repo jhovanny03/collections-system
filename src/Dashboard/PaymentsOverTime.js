@@ -20,9 +20,9 @@ const PaymentsOverTime = () => {
   ];
 
   return (
-    <Card>
+    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
           Payments Over Time
         </Typography>
         <ResponsiveContainer width="100%" height={300}>
