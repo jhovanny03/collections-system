@@ -1,75 +1,71 @@
 import React from "react";
-import {
-  Grid,
-  Card,
-  CardContent,
-  Typography,
-  Avatar,
-  Box,
-} from "@mui/material";
-import {
-  Person,
-  AttachMoney,
-  Warning,
-  CheckCircle,
-  CalendarToday,
-} from "@mui/icons-material";
+import { Box, Card, Typography, Grid } from "@mui/material";
+import PersonIcon from "@mui/icons-material/Person";
+import MonetizationOnIcon from "@mui/icons-material/MonetizationOn";
+import WarningIcon from "@mui/icons-material/Warning";
+import HandshakeIcon from "@mui/icons-material/Handshake";
+import EventNoteIcon from "@mui/icons-material/EventNote";
 
-const SummaryCards = () => {
-  const stats = [
-    {
-      label: "Total Clients",
-      value: 120,
-      icon: <Person />,
-      color: "primary.main",
-    },
-    {
-      label: "Total Owed",
-      value: "$150,000",
-      icon: <AttachMoney />,
-      color: "success.main",
-    },
-    {
-      label: "Past Due Clients",
-      value: 45,
-      icon: <Warning />,
-      color: "error.main",
-    },
-    {
-      label: "Active Arrangements",
-      value: 20,
-      icon: <CheckCircle />,
-      color: "info.main",
-    },
-    {
-      label: "Promised Payments",
-      value: "$30,000",
-      icon: <CalendarToday />,
-      color: "secondary.main",
-    },
-  ];
+const cards = [
+  {
+    title: "Total Clients",
+    valueKey: "totalClients",
+    icon: <PersonIcon fontSize="large" sx={{ color: "#6366f1" }} />,
+    color: "#e0e7ff",
+  },
+  {
+    title: "Total Owed",
+    valueKey: "totalOwed",
+    icon: <MonetizationOnIcon fontSize="large" sx={{ color: "#10b981" }} />,
+    color: "#d1fae5",
+    isCurrency: true,
+  },
+  {
+    title: "Past Due Clients",
+    valueKey: "pastDueClients",
+    icon: <WarningIcon fontSize="large" sx={{ color: "#ef4444" }} />,
+    color: "#fee2e2",
+  },
+  {
+    title: "Active Arrangements",
+    valueKey: "activeArrangements",
+    icon: <HandshakeIcon fontSize="large" sx={{ color: "#0ea5e9" }} />,
+    color: "#e0f2fe",
+  },
+  {
+    title: "Promised Payments",
+    valueKey: "promisedPayments",
+    icon: <EventNoteIcon fontSize="large" sx={{ color: "#f472b6" }} />,
+    color: "#fce7f3",
+    isCurrency: true,
+  },
+];
 
+const SummaryCards = ({ data }) => {
   return (
-    <Grid container spacing={3}>
-      {stats.map((stat, index) => (
-        <Grid item xs={12} sm={6} md={2.4} key={index}>
+    <Grid container spacing={2} sx={{ mb: 3 }}>
+      {cards.map((card) => (
+        <Grid item xs={12} sm={6} md={2.4} key={card.title}>
           <Card
             sx={{
-              p: 2,
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              bgcolor: "background.paper",
+              p: 2,
+              borderRadius: 4,
+              backgroundColor: card.color,
+              height: "100%",
               boxShadow: 3,
-              borderRadius: 2,
             }}
           >
-            <Avatar sx={{ bgcolor: stat.color, mb: 1 }}>{stat.icon}</Avatar>
-            <Typography variant="subtitle2" color="textSecondary">
-              {stat.label}
+            <Box mb={1}>{card.icon}</Box>
+            <Typography variant="body2" fontWeight="bold">
+              {card.title}
             </Typography>
-            <Typography variant="h5" fontWeight="bold">
-              {stat.value}
+            <Typography variant="h6" fontWeight="bold">
+              {card.isCurrency
+                ? `$${Number(data?.[card.valueKey] || 0).toLocaleString()}`
+                : data?.[card.valueKey] || 0}
             </Typography>
           </Card>
         </Grid>

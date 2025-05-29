@@ -8,7 +8,8 @@ import {
   updateDoc,
   arrayUnion,
 } from "firebase/firestore";
-import db from "./firebase";
+import { signInAnonymously } from "firebase/auth";
+import db, { auth } from "./firebase"; // ✅ Default and named import
 
 import Sidebar from "./Layout/Sidebar";
 import DarkModeToggle from "./Layout/DarkModeToggle";
@@ -24,10 +25,24 @@ import Dashboard from "./Dashboard/Dashboard";
 function App() {
   const [clients, setClients] = useState([]);
   const [mode, setMode] = useState("light");
+  const [isLoggedIn, setIsLoggedIn] = useState(false); // ✅ Track login state
 
   useEffect(() => {
     const fetchClients = async () => {
       try {
+        await signInAnonymously(auth); // ✅ Sign in anonymously
+        console.log("✅ Signed in anonymously");
+
+        const user = auth.currentUser;
+        console.log("✅ Current user:", user);
+
+        if (!user) {
+          console.error("❌ No user authenticated");
+          return;
+        }
+
+        setIsLoggedIn(true); // ✅ Allow app to render
+
         const snapshot = await getDocs(collection(db, "clients"));
         const data = snapshot.docs.map((doc) => ({
           id: doc.id,
@@ -35,7 +50,7 @@ function App() {
         }));
         setClients(data);
       } catch (error) {
-        console.error("Error fetching clients:", error);
+        console.error("❌ Error during auth or fetching clients:", error);
       }
     };
 
@@ -106,29 +121,36 @@ function App() {
           <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
             <DarkModeToggle mode={mode} toggleColorMode={toggleColorMode} />
             <PageTransition>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route
-                  path="/clients"
-                  element={<ClientList clients={clients} />}
-                />
-                <Route path="/create-client" element={<CreateClient />} />
-                <Route path="/client/:clientId" element={<ClientDashboard />} />
-                <Route
-                  path="/promised-payments"
-                  element={<PromisedPaymentCalendar />}
-                />
-                <Route
-                  path="/follow-ups"
-                  element={
-                    <FollowUps
-                      clients={clients}
-                      updateClientCommunication={updateClientCommunication}
-                    />
-                  }
-                />
-                <Route path="/dashboard" element={<Dashboard />} />
-              </Routes>
+              {isLoggedIn ? (
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route
+                    path="/clients"
+                    element={<ClientList clients={clients} />}
+                  />
+                  <Route path="/create-client" element={<CreateClient />} />
+                  <Route
+                    path="/client/:clientId"
+                    element={<ClientDashboard />}
+                  />
+                  <Route
+                    path="/promised-payments"
+                    element={<PromisedPaymentCalendar />}
+                  />
+                  <Route
+                    path="/follow-ups"
+                    element={
+                      <FollowUps
+                        clients={clients}
+                        updateClientCommunication={updateClientCommunication}
+                      />
+                    }
+                  />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                </Routes>
+              ) : (
+                <p>Loading authentication...</p>
+              )}
             </PageTransition>
           </Box>
         </Box>
