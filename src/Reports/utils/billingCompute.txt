@@ -1,0 +1,165 @@
+// src/Reports/utils/billingCompute.js
+// Small, self-contained billing math so reports match your dashboard behavior.
+
+const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+
+const toDate = (raw) => (raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw));
+
+const labelFor = (d) =>
+  `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
+
+const getScheduleAmount = (client, date) => {
+  const schedule = (client.installmentSchedule || []).slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+  for (const s of schedule) {
+    const sStart = new Date(s.start);
+    const sEnd = new Date(s.end);
+    if (date >= sStart && date <= sEnd) return Number(s.amount);
+  }
+  return 500;
+};
+
+export function computeBillingSnapshot(client, asOfDate = new Date()) {
+  const status = (client?.status || "active").toLowerCase(); // active | paused | closed
+  const isPaused = status === "paused";
+  const isClosed = status === "closed";
+
+  const invoiceTotal = Number(client?.invoiceTotal || 0);
+  const initialPayment = Number(client?.initialPaymentAmount || 0);
+
+  const expectedAnchor = client.expectedAnchor ? new Date(client.expectedAnchor) : null;
+  const startRaw = client.firstInstallmentDate;
+  const startBase = expectedAnchor || (startRaw ? toDate(startRaw) : null);
+  if (!startBase || isNaN(startBase)) {
+    return {
+      status: status.toUpperCase(),
+      amountDue: 0,
+      missedMonths: 0,
+      remainingBalance: Math.max(0, invoiceTotal - initialPayment),
+      lastPayment: getLastPayment(client),
+      nextExpectedLabel: null,
+    };
+  }
+
+  const firstDue = new Date(startBase.getFullYear(), startBase.getMonth(), 15);
+  const pauseAt = client.pauseStartedAt ? toDate(client.pauseStartedAt) : null;
+
+  // Build cutoff for accrual
+  const cutoff = !isClosed && isPaused && pauseAt
+    ? new Date(pauseAt.getFullYear(), pauseAt.getMonth(), 14)
+    : asOfDate;
+
+  // Skip set
+  const skipSet = new Set((client.skipMonths || []).map(String));
+
+  // Payments after initial payment date
+  const payments = (client.payments || []).filter(
+    (p) => new Date(p.date) > new Date(client.initialPaymentDate)
+  );
+  const pool = payments.map((p) => ({ amount: Number(p.amount), date: p.date }));
+
+  // Accrual months (excluding skipped)
+  const months = [];
+  if (!isClosed) {
+    const c = new Date(firstDue);
+    while (c <= cutoff) {
+      if (!skipSet.has(ymKey(c))) months.push(new Date(c));
+      c.setMonth(c.getMonth() + 1);
+    }
+  }
+
+  // Allocate payments oldest-first
+  let validPaid = 0;
+  let missed = 0;
+  for (const m of months) {
+    const dueAmt = getScheduleAmount(client, m);
+    let paid = 0;
+    for (const p of pool) {
+      if (p.amount <= 0) continue;
+      if (paid >= dueAmt) break;
+      const use = Math.min(dueAmt - paid, p.amount);
+      paid += use;
+      validPaid += use;
+      p.amount -= use;
+    }
+    if (paid < dueAmt) missed += 1;
+  }
+
+  // Extra prepayments apply to future months only if active
+  if (!isClosed && !isPaused) {
+    let leftover = pool.reduce((s, p) => s + (p.amount || 0), 0);
+    if (leftover > 0) {
+      const c = new Date(asOfDate);
+      c.setDate(15);
+      if (c <= asOfDate) c.setMonth(c.getMonth() + 1);
+
+      let guard = 0;
+      while (leftover > 0 && guard < 60) {
+        if (skipSet.has(ymKey(c))) {
+          c.setMonth(c.getMonth() + 1);
+          guard++;
+          continue;
+        }
+        const amt = getScheduleAmount(client, c);
+        const use = Math.min(amt, leftover);
+        validPaid += use;
+        leftover -= use;
+        c.setMonth(c.getMonth() + 1);
+        guard++;
+      }
+    }
+  }
+
+  const amountDue = isClosed ? 0 : months
+    .reduce((sum, d) => sum + getScheduleAmount(client, d), 0)
+    - validPaid;
+
+  const remainingBalance = isClosed
+    ? 0
+    : Math.max(0, invoiceTotal - initialPayment - validPaid);
+
+  // Next expected month (first unpaid, non-skipped & active only)
+  let nextExpectedLabel = null;
+  if (!isClosed && !isPaused) {
+    const simPool = payments.map((p) => ({ amount: Number(p.amount), date: p.date }));
+    const paidMonth = (d) => {
+      if (skipSet.has(ymKey(d))) return true;
+      const due = getScheduleAmount(client, d);
+      let paid = 0;
+      for (const p of simPool) {
+        if (p.amount <= 0) continue;
+        const use = Math.min(due - paid, p.amount);
+        paid += use;
+        p.amount -= use;
+        if (paid >= due) break;
+      }
+      return paid >= due;
+    };
+    const probe = new Date(firstDue);
+    let guard = 0;
+    while (guard < 120 && paidMonth(probe)) {
+      probe.setMonth(probe.getMonth() + 1);
+      guard++;
+    }
+    nextExpectedLabel = labelFor(probe);
+  }
+
+  return {
+    status: status.toUpperCase(),
+    amountDue: Math.max(0, Math.round(amountDue)),
+    missedMonths: isClosed ? 0 : missed,
+    remainingBalance: Math.max(0, Math.round(remainingBalance)),
+    lastPayment: getLastPayment(client),
+    nextExpectedLabel,
+  };
+}
+
+function getLastPayment(client) {
+  const pays = client?.payments || [];
+  if (!pays.length) return null;
+  const latest = pays.reduce((a, b) =>
+    new Date(a.date) > new Date(b.date) ? a : b
+  );
+  return { date: latest.date, amount: Number(latest.amount || 0) };
+}

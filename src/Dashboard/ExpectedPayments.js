@@ -1,21 +1,20 @@
-import React from "react";
-import { Card, CardContent, Typography } from "@mui/material";
+import React from 'react';
+import { Typography } from '@mui/material';
+import DashboardCard from './DashboardCard';
 
-const ExpectedPayments = () => {
+export default function ExpectedPayments() {
   const expectedTotal = 40000;
 
   return (
-    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
-      <CardContent>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-          Expected Payments This Month
-        </Typography>
-        <Typography variant="h4" align="center" color="primary">
-          ${expectedTotal.toLocaleString()}
-        </Typography>
-      </CardContent>
-    </Card>
+    <DashboardCard title="Expected Payments This Month">
+      <Typography
+        variant="h4"
+        align="center"
+        color="primary"
+        sx={{ fontWeight: 700 }}
+      >
+        ${expectedTotal.toLocaleString()}
+      </Typography>
+    </DashboardCard>
   );
-};
-
-export default ExpectedPayments;
+}

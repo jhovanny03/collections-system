@@ -1,0 +1,461 @@
+// BillingOverview.js
+import React from "react";
+import {
+  Card,
+  CardContent,
+  Grid,
+  Typography,
+  Box,
+  LinearProgress,
+  Chip,
+  Divider,
+  Stack,
+} from "@mui/material";
+import { motion } from "framer-motion";
+import PersonIcon from "@mui/icons-material/Person";
+import BalanceIcon from "@mui/icons-material/Gavel";
+import StatusIcon from "@mui/icons-material/Info";
+import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
+import PaidIcon from "@mui/icons-material/Paid";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
+
+export default function BillingOverview({ client }) {
+  const status = client?.status || "active"; // "active" | "paused" | "closed"
+  const isPaused = status === "paused";
+  const isClosed = status === "closed";
+
+  // ---- Base invoice + adjustments ------------------------------------------
+  const invoiceBase = Number(client?.invoiceTotal || 0);
+  const adjustments = Array.isArray(client?.invoiceAdjustments)
+    ? client.invoiceAdjustments
+    : [];
+
+  // Treat any item with applyTo === 'balance' as affecting the invoice balance.
+  // Anything else (e.g., 'upfront_only') is informational / not part of the balance.
+  const adjToBalanceTotal = adjustments.reduce((sum, a) => {
+    const applyTo = (a?.applyTo || "balance").toLowerCase();
+    const amt = Number(a?.amount || 0);
+    return applyTo === "balance" ? sum + amt : sum;
+  }, 0);
+
+  const upfrontOnlyTotal = adjustments.reduce((sum, a) => {
+    const applyTo = (a?.applyTo || "balance").toLowerCase();
+    const amt = Number(a?.amount || 0);
+    return applyTo === "upfront_only" ? sum + amt : sum;
+  }, 0);
+
+  // Effective invoice = base + balance-affecting adjustments (can be + or -)
+  const invoiceEffective = Math.max(0, invoiceBase + adjToBalanceTotal);
+
+  const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
+  const allPayments = client?.payments || [];
+
+  // Parse helper for Firestore Timestamp or string/Date
+  const toDate = (raw) =>
+    raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+
+  const rawStart = client.firstInstallmentDate;
+  if (!rawStart) return <Typography>Missing first installment date.</Typography>;
+
+  // ---------- Skip Months support ----------
+  const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+  const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+  const skipSet = new Set((client.skipMonths || []).map(String)); // e.g., "2025-08"
+  const monthIsSkipped = (d) => skipSet.has(ymKey(d));
+
+  // Anchor logic:
+  const expectedAnchor =
+    client.expectedAnchor ? new Date(client.expectedAnchor) : null;
+  const anchorDate = expectedAnchor || toDate(rawStart);
+
+  // Standardize all due dates to the 15th of the month
+  const firstDueDate = new Date(
+    anchorDate.getFullYear(),
+    anchorDate.getMonth(),
+    15
+  );
+
+  const today = new Date();
+  const pauseStartedAt = client.pauseStartedAt ? toDate(client.pauseStartedAt) : null;
+
+  // ---------- Helpers ----------
+  const money = (n) =>
+    `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}`;
+
+  const labelFor = (d) =>
+    `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
+
+  // Schedule (sorted)
+  const schedule = (client.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const getInstallmentAmountForDate = (date) => {
+    for (let i = 0; i < schedule.length; i++) {
+      const s = schedule[i];
+      const sStart = new Date(s.start);
+      const sEnd = new Date(s.end);
+      if (date >= sStart && date <= sEnd) return Number(s.amount);
+    }
+    return 500; // default
+  };
+
+  // Only payments AFTER the initial payment date count toward installments
+  const paymentsAfterInitial = allPayments.filter(
+    (p) => new Date(p.date) > new Date(client.initialPaymentDate)
+  );
+
+  // Clone for allocation
+  const paymentPool = paymentsAfterInitial.map((p) => ({
+    amount: Number(p.amount),
+    date: p.date,
+  }));
+
+  // ---------- Build month list from firstDueDate up to cutoff ----------
+  const monthsUpToCutoff = [];
+  if (!isClosed) {
+    const cutoff =
+      isPaused && pauseStartedAt
+        ? new Date(pauseStartedAt.getFullYear(), pauseStartedAt.getMonth(), 14) // up to day before the pause-month 15th
+        : today;
+
+    const cursor = new Date(firstDueDate);
+    while (cursor <= cutoff) {
+      if (!monthIsSkipped(cursor)) {
+        monthsUpToCutoff.push(new Date(cursor));
+      }
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  // ---------- Allocate payments oldest-first to past months ----------
+  let validTotalPaid = 0;
+  const dueMonths = []; // { label, amount }
+
+  for (const monthDate of monthsUpToCutoff) {
+    const amountDue = getInstallmentAmountForDate(monthDate);
+    let monthPaid = 0;
+
+    for (const p of paymentPool) {
+      if (p.amount <= 0) continue;
+      if (monthPaid >= amountDue) break;
+
+      const used = Math.min(amountDue - monthPaid, p.amount);
+      monthPaid += used;
+      validTotalPaid += used;
+      p.amount -= used;
+    }
+
+    if (monthPaid < amountDue) {
+      dueMonths.push({ label: labelFor(monthDate), amount: amountDue });
+    }
+  }
+
+  // ---------- Extra prepayments go to FUTURE months only if active ----------
+  if (!isClosed && !isPaused) {
+    let leftover = paymentPool.reduce((s, p) => s + (p.amount || 0), 0);
+    if (leftover > 0) {
+      const futureAllocCursor = new Date(today);
+      futureAllocCursor.setDate(15);
+      if (futureAllocCursor <= today) {
+        futureAllocCursor.setMonth(futureAllocCursor.getMonth() + 1);
+      }
+
+      let guard = 0;
+      while (leftover > 0 && guard < 60) {
+        if (monthIsSkipped(futureAllocCursor)) {
+          futureAllocCursor.setMonth(futureAllocCursor.getMonth() + 1);
+          guard++;
+          continue;
+        }
+        const amt = getInstallmentAmountForDate(futureAllocCursor);
+        const use = Math.min(amt, leftover);
+        validTotalPaid += use;
+        leftover -= use;
+
+        futureAllocCursor.setMonth(futureAllocCursor.getMonth() + 1);
+        guard++;
+      }
+    }
+  }
+
+  // ---------- Totals ----------
+  const amountDue = isClosed
+    ? 0
+    : dueMonths.reduce((sum, m) => sum + m.amount, 0);
+
+  // ⚠️ Remaining and progress should use the EFFECTIVE invoice total
+  const computedRemaining = Math.max(
+    0,
+    invoiceEffective - initialPayment - validTotalPaid
+  );
+  const remainingBalance = isClosed ? 0 : computedRemaining;
+
+  // ---------- First truly unpaid month (for projection) ----------
+  const simPool = paymentsAfterInitial.map((p) => ({
+    amount: Number(p.amount),
+    date: p.date,
+  }));
+
+  const monthIsFullyPaid = (d, pool) => {
+    if (monthIsSkipped(d)) return true; // skipped months are not billable
+    const due = getInstallmentAmountForDate(d);
+    let paid = 0;
+    for (const p of pool) {
+      if (p.amount <= 0) continue;
+      const take = Math.min(due - paid, p.amount);
+      paid += take;
+      p.amount -= take;
+      if (paid >= due) break;
+    }
+    return paid >= due;
+  };
+
+  const firstUnpaid = new Date(firstDueDate);
+  let guardSim = 0;
+  while (!isClosed && !isPaused && guardSim < 120 && monthIsFullyPaid(firstUnpaid, simPool)) {
+    firstUnpaid.setMonth(firstUnpaid.getMonth() + 1);
+    guardSim++;
+  }
+
+  // ---------- Project months to fully cover remaining balance (active only) ----------
+  const futureMonths = [];
+  if (!isClosed && !isPaused && remainingBalance > 0) {
+    let futureStartDate = new Date(firstUnpaid);
+    const cutoff = new Date(futureStartDate);
+    cutoff.setFullYear(cutoff.getFullYear() + 3);
+
+    let futureAccum = 0;
+    let guard = 0;
+    while (
+      futureStartDate <= cutoff &&
+      futureAccum < remainingBalance &&
+      futureMonths.length < 48 &&
+      guard < 60
+    ) {
+      if (monthIsSkipped(futureStartDate)) {
+        futureStartDate.setMonth(futureStartDate.getMonth() + 1);
+        guard++;
+        continue;
+      }
+
+      const amt = getInstallmentAmountForDate(futureStartDate);
+      futureMonths.push({ label: labelFor(futureStartDate), amount: amt });
+      futureAccum += amt;
+      futureStartDate.setMonth(futureStartDate.getMonth() + 1);
+      guard++;
+    }
+  }
+
+  // ---------- UI helpers ----------
+  const getLastPaymentDisplay = () => {
+    if (!allPayments.length) return "N/A";
+    const latest = allPayments.reduce((latest, p) =>
+      new Date(p.date) > new Date(latest.date) ? p : latest
+    );
+    const dateStr = new Date(latest.date).toLocaleDateString("default", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    return `${dateStr} – $${Number(latest.amount).toLocaleString()}`;
+  };
+
+  const rows = [
+    { label: "Name", value: `${client.firstName} ${client.lastName}`, icon: <PersonIcon /> },
+    { label: "Case Type", value: client.caseType, icon: <BalanceIcon /> },
+    { label: "Case Status", value: client.caseStatus, icon: <StatusIcon /> },
+
+    // Show Base + Adjustments + Effective
+    { label: "Invoice Total (Base)", value: money(invoiceBase), icon: <AttachMoneyIcon /> },
+    { label: "Adj. to Balance (±)", value: money(adjToBalanceTotal), icon: <AttachMoneyIcon /> },
+    { label: "Invoice Total (Effective)", value: money(invoiceEffective), icon: <AttachMoneyIcon /> },
+
+    { label: "Initial Payment", value: money(initialPayment), icon: <PaidIcon /> },
+    { label: "Total Paid (Installments Only)", value: money(validTotalPaid), icon: <PaidIcon /> },
+
+    // Upfront adjustments are **not** counted toward installments/balance
+    ...(upfrontOnlyTotal !== 0
+      ? [{ label: "Upfront Adjustments (Not in Balance)", value: money(upfrontOnlyTotal), icon: <AttachMoneyIcon /> }]
+      : []),
+
+    { label: "Remaining Balance", value: money(remainingBalance), icon: <AttachMoneyIcon /> },
+    { label: "Payments Left", value: isClosed ? 0 : futureMonths.length, icon: <CalendarMonthIcon /> },
+    { label: "Amount Due", value: money(amountDue), icon: <AttachMoneyIcon /> },
+    {
+      label: "Months Past Due",
+      value: isClosed ? "None" : (dueMonths.length || "None"),
+      icon: <CalendarMonthIcon />,
+    },
+    {
+      label: "Missed Months",
+      value:
+        isClosed || !dueMonths.length
+          ? "None"
+          : `${dueMonths[0].label} – ${dueMonths[dueMonths.length - 1].label}`,
+      icon: <CalendarMonthIcon />,
+    },
+    // Only show expected months when ACTIVE
+    ...(isClosed || isPaused
+      ? []
+      : [
+          {
+            label: "Expected Due Months",
+            value: futureMonths.map((m) => m.label).join(", "),
+            icon: <CalendarMonthIcon />,
+          },
+        ]),
+    { label: "Last Payment", value: getLastPaymentDisplay(), icon: <AccessTimeIcon /> },
+  ];
+
+  // Progress uses EFFECTIVE total
+  const progress =
+    invoiceEffective > 0
+      ? ((initialPayment + validTotalPaid) / invoiceEffective) * 100
+      : 0;
+
+  const statusColor =
+    isClosed ? "default" : isPaused ? "warning" : "success";
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+      <Card elevation={3} sx={{ borderRadius: 3, mb: 4 }}>
+        <CardContent>
+          <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+            <Typography variant="h6" fontWeight="bold">Billing Overview</Typography>
+            <Chip
+              label={status.toUpperCase()}
+              color={statusColor}
+              variant={isPaused ? "filled" : "outlined"}
+              size="small"
+            />
+          </Box>
+
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Payment Progress (vs Effective Invoice Total)
+            </Typography>
+            <Box display="flex" alignItems="center" gap={2}>
+              <Box sx={{ flexGrow: 1 }}>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.max(0, Math.min(100, progress))}
+                  sx={{ height: 10, borderRadius: 5 }}
+                />
+              </Box>
+              <Typography variant="body2" fontWeight="bold">
+                {Math.round(Math.max(0, Math.min(100, progress)))}%
+              </Typography>
+            </Box>
+          </Box>
+
+          <Grid container spacing={2}>
+            {rows.map((row, index) => (
+              <Grid item xs={12} sm={6} key={index}>
+                <Box
+                  display="flex"
+                  alignItems="flex-start"
+                  gap={1.5}
+                  p={1}
+                  borderRadius={2}
+                  sx={{
+                    transition: "0.2s",
+                    "&:hover": {
+                      backgroundColor: "#f9f9f9",
+                      transform: "translateY(-2px)",
+                      boxShadow: 2,
+                    },
+                  }}
+                >
+                  <Box color="primary.main" mt={0.5}>
+                    {row.icon}
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">
+                      {row.label}
+                    </Typography>
+                    <Typography variant="body1" fontWeight="500">
+                      {row.value}
+                    </Typography>
+                  </Box>
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
+
+          {/* Adjustment Log */}
+          {adjustments.length > 0 && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+                Adjustment Log
+              </Typography>
+              <Stack spacing={1}>
+                {adjustments
+                  .slice()
+                  .sort((a, b) => new Date(b.date || b.createdAt || 0) - new Date(a.date || a.createdAt || 0))
+                  .map((a, idx) => {
+                    const when = a.date || a.createdAt;
+                    const applyTo = (a.applyTo || "balance").toLowerCase();
+                    const type = a.type || "Adjustment";
+                    const reason = a.reason || "—";
+                    const by = a.createdBy || "—";
+                    const sign = Number(a.amount || 0) >= 0 ? "+" : "−";
+                    const amtAbs = Math.abs(Number(a.amount || 0));
+                    const tone =
+                      applyTo === "balance"
+                        ? amtAbs === 0
+                          ? "default"
+                          : Number(a.amount) >= 0
+                          ? "warning"
+                          : "success"
+                        : "info";
+
+                    return (
+                      <Box
+                        key={idx}
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1,
+                          p: 1,
+                          borderRadius: 1.5,
+                          bgcolor: "background.default",
+                          border: "1px solid",
+                          borderColor: "divider",
+                        }}
+                      >
+                        <Chip size="small" label={type} color="primary" variant="outlined" />
+                        <Chip
+                          size="small"
+                          label={applyTo === "balance" ? "Affects Balance" : "Upfront Only"}
+                          color={applyTo === "balance" ? "secondary" : "info"}
+                          variant="outlined"
+                        />
+                        <Typography variant="body2" sx={{ flexGrow: 1 }}>
+                          {reason}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {when ? new Date(when).toLocaleDateString() : "—"}
+                        </Typography>
+                        <Chip
+                          size="small"
+                          label={`${sign}$${amtAbs.toLocaleString()}`}
+                          color={tone}
+                          variant="outlined"
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                          by {by}
+                        </Typography>
+                      </Box>
+                    );
+                  })}
+              </Stack>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}

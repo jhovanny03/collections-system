@@ -1,40 +1,22 @@
-import React from "react";
-import { Card, CardContent, Typography } from "@mui/material";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import React from 'react';
+import DashboardCard from './DashboardCard';
+import { BarChart } from '@mui/x-charts/BarChart';
 
-const PaymentsLast3Months = () => {
-  const data = [
-    { month: "March", payments: 18000 },
-    { month: "April", payments: 22000 },
-    { month: "May", payments: 25000 },
-  ];
+const rows = [
+  { month: 'March', payments: 18000 },
+  { month: 'April', payments: 22000 },
+  { month: 'May', payments: 25000 },
+];
 
+export default function PaymentsLast3Months() {
   return (
-    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
-      <CardContent>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-          Payments Last 3 Months
-        </Typography>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="month" />
-            <YAxis />
-            <Tooltip />
-            <Bar dataKey="payments" fill="#10b981" />
-          </BarChart>
-        </ResponsiveContainer>
-      </CardContent>
-    </Card>
+    <DashboardCard title="Payments Last 3 Months">
+      <BarChart
+        height={280}
+        xAxis={[{ scaleType: 'band', data: rows.map(r => r.month) }]}
+        series={[{ data: rows.map(r => r.payments) }]}
+        grid={{ horizontal: true }}
+      />
+    </DashboardCard>
   );
-};
-
-export default PaymentsLast3Months;
+}

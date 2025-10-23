@@ -1,0 +1,245 @@
+// src/Dashboard/SummaryCards.jsx
+import * as React from "react";
+import {
+  Card,
+  CardContent,
+  Stack,
+  Box,
+  Typography,
+  Avatar,
+  LinearProgress,
+} from "@mui/material";
+import ArrowUpwardRounded from "@mui/icons-material/ArrowUpwardRounded";
+import ArrowDownwardRounded from "@mui/icons-material/ArrowDownwardRounded";
+
+import PeopleRounded from "@mui/icons-material/PeopleRounded";
+import ReportProblemRounded from "@mui/icons-material/ReportProblemRounded";
+import AttachMoneyRounded from "@mui/icons-material/AttachMoneyRounded";
+import HandshakeRounded from "@mui/icons-material/HandshakeRounded";
+import EventAvailableRounded from "@mui/icons-material/EventAvailableRounded";
+import PersonRounded from "@mui/icons-material/PersonRounded";
+
+const CARD_MIN_HEIGHT = 112;
+
+export default function SummaryCards({
+  data = {},
+  diffs = {},
+  omitKeys = [],
+  extraEndSlot = null,
+}) {
+  const {
+    totalOwed = 0,
+    totalClients = 0,
+    pastDueClients = 0,
+    promisedPayments = 0,
+    activeArrangements = 0,
+    expectedPaymentsThisMonth = 0,
+    mtdAccountsReceivable = 0,
+    ytdOutstandingBalance = 0,
+  } = data;
+
+  const formatNumber = (n) =>
+    typeof n === "number" ? n.toLocaleString() : n ?? "—";
+  const formatCurrency = (n) =>
+    typeof n === "number" ? `$${Math.round(n).toLocaleString()}` : n ?? "—";
+
+  const ordered = [
+    {
+      key: "totalClients",
+      title: "Total Clients",
+      value: formatNumber(totalClients),
+      diff: diffs.totalClients,
+      color: "rgb(20,184,166)",
+      Icon: PersonRounded, // avatar solo aquí
+    },
+    {
+      key: "pastDueClients",
+      title: "Past Due Clients",
+      value: formatNumber(pastDueClients),
+      diff: diffs.pastDueClients,
+      color: "rgb(245,158,11)",
+      Icon: ReportProblemRounded,
+    },
+    {
+      key: "totalOwed",
+      title: "Total Owed",
+      value: formatCurrency(totalOwed),
+      diff: diffs.totalOwed,
+      color: "rgb(102,95,239)",
+      Icon: AttachMoneyRounded,
+    },
+    {
+      key: "promisedPayments",
+      title: "Promised Payments",
+      value: formatCurrency(promisedPayments),
+      diff: diffs.promisedPayments,
+      color: "rgb(99,102,241)",
+      Icon: AttachMoneyRounded,
+    },
+    /*{
+      key: "activeArrangements",
+      title: "Active Arrangements",
+      value: formatNumber(activeArrangements),
+      diff: diffs.activeArrangements,
+      color: "rgb(59,130,246)",
+      Icon: HandshakeRounded,
+    },*/
+    {
+      key: "expectedPaymentsThisMonth",
+      title: ["Expected Payments", "This Month"],
+      value: formatCurrency(expectedPaymentsThisMonth),
+      diff: diffs.expectedPaymentsThisMonth,
+      color: "rgb(102,95,239)",
+      Icon: EventAvailableRounded,
+      subnote: "Current month only • resets on 1st",
+    },
+    {
+      // NEW: la nueva card que pediste, colocada justo al lado de “Expected Payments This Month”
+      key: "mtdAccountsReceivable",
+      title: ["MTD Accounts", "Receivable"], // 2 líneas como la de Expected
+      value: formatCurrency(mtdAccountsReceivable),
+      diff: diffs.mtdAccountsReceivable, // puede venir vacío; no es obligatorio
+      color: "rgb(239,68,68)", // rojo suave para diferenciar (puedes cambiar)
+      Icon: AttachMoneyRounded,
+    },
+    {
+      key: "ytdOutstandingBalance",
+      title: ["YTD Outstanding", "Balance"], // ← tu etiqueta solicitada
+      value: formatCurrency(ytdOutstandingBalance),
+      diff: diffs.ytdOutstandingBalance, // opcional, pero ya lo calculas en Dashboard.js
+      color: "rgb(234,88,12)", // naranja intenso para diferenciar
+      Icon: AttachMoneyRounded,
+      // Si prefieres que diga literalmente "YTD", cambia el texto de `title`.
+    },
+  ];
+
+  const items = ordered.filter((i) => !omitKeys.includes(i.key));
+
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+        gap: 1.25, // ≈10px. Mantén este mismo valor como gap del grid madre
+        alignItems: "stretch",
+        mb: 0,
+      }}
+    >
+      {items.map((c) => (
+        <Box key={c.key}>
+          <SummaryCard title={c.title} value={c.value} diff={c.diff} iconBg={c.color} Icon={c.Icon} />
+        </Box>
+      ))}
+
+      {extraEndSlot && <Box>{extraEndSlot}</Box>}
+    </Box>
+  );
+}
+
+function SummaryCard({
+  title,
+  value,
+  valueSuffix = "",
+  iconBg = "rgb(102,95,239)",
+  diff,
+  progress,
+  Icon = PeopleRounded,
+}) {
+  const isDown = diff?.direction === "down";
+  const DiffIcon = isDown ? ArrowDownwardRounded : ArrowUpwardRounded;
+
+  return (
+    <Card
+      elevation={0}
+      sx={{
+        borderRadius: 1,
+        boxShadow: "0 12px 28px rgba(16,24,40,0.06)",
+        border: "1px solid rgba(0,0,0,0.04)",
+        height: "100%",
+        minHeight: CARD_MIN_HEIGHT,
+      }}
+    >
+      <CardContent sx={{ p: 3 }}>
+        <Stack direction="row" spacing={3.5} alignItems="flex-start">
+          <Box sx={{ flex: 1, minWidth: 0, pr: 1 }}>
+            {Array.isArray(title) ? (
+              <Box sx={{ lineHeight: 1.1 }}>
+                <Typography variant="caption" sx={{ color: "text.secondary", letterSpacing: 0.6, fontWeight: 600, display: "block" }}>
+                  {String(title[0]).toUpperCase()}
+                </Typography>
+                <Typography variant="caption" sx={{ color: "text.secondary", letterSpacing: 0.6, fontWeight: 600, display: "block" }}>
+                  {String(title[1]).toUpperCase()}
+                </Typography>
+              </Box>
+            ) : (
+              <Typography
+                variant="caption"
+                noWrap
+                sx={{
+                  color: "text.secondary",
+                  letterSpacing: 0.6,
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {String(title).toUpperCase()}
+              </Typography>
+            )}
+
+            <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mt: 1 }}>
+              <Typography variant="h4" sx={{ fontWeight: 700, lineHeight: 1 }}>
+                {value}
+                {valueSuffix}
+              </Typography>
+            </Stack>
+
+            {typeof progress === "number" && (
+              <Box sx={{ mt: 2 }}>
+                <LinearProgress
+                  variant="determinate"
+                  value={progress}
+                  sx={{
+                    height: 6,
+                    borderRadius: 999,
+                    "& .MuiLinearProgress-bar": { borderRadius: 999 },
+                  }}
+                />
+              </Box>
+            )}
+
+            {diff && (
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.5 }}>
+                <Stack direction="row" alignItems="center" spacing={0.5}>
+                  <DiffIcon fontSize="small" sx={{ color: isDown ? "error.main" : "success.main" }} />
+                  <Typography variant="body2" sx={{ fontWeight: 700, color: isDown ? "error.main" : "success.main" }}>
+                    {Math.abs(diff.value).toFixed(1)}%
+                  </Typography>
+                </Stack>
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  {diff.label ?? "Since last month"}
+                </Typography>
+              </Stack>
+            )}
+          </Box>
+
+          <Avatar
+            variant="circular"
+            sx={{
+              width: 40,
+              height: 40,
+              ml: "auto",
+              flexShrink: 0,
+              bgcolor: iconBg,
+              color: "common.white",
+              boxShadow: "0 6px 14px rgba(102,95,239,0.18)",
+            }}
+          >
+          {Icon ? <Icon fontSize="small" /> : <PersonRounded fontSize="small" />}
+          </Avatar>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}

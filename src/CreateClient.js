@@ -1,116 +1,287 @@
-import React, { useState } from 'react';
-import db from './firebase';
-import { collection, addDoc } from 'firebase/firestore';
+// CreateClient.js
+import React, { useState } from "react";
+import db from "./firebase";
+import { collection, addDoc, doc, getDoc } from "firebase/firestore";
 
-function CreateClient({ onClientCreated }) {
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [myCaseLink, setMyCaseLink] = useState('');
-  const [caseType, setCaseType] = useState('');
-  const [caseStatus, setCaseStatus] = useState('');
+// Reuse your existing invoice editor (exact same behavior)
+import InvoiceSection from "./InvoiceSection";
+
+// MUI
+import {
+  Box,
+  Card,
+  CardContent,
+  CardHeader,
+  TextField,
+  Button,
+  Grid,
+  Stack,
+  Snackbar,
+  Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+} from "@mui/material";
+// Optional animation (safe to remove if you don't want it)
+import { motion } from "framer-motion";
+
+const CASE_TYPES = [
+  "VAWA SPOUSE",
+  "PARENT VAWA",
+  "CHILD VAWA",
+  "T VISA",
+  "U VISA",
+  "MARRIAGE AOS",
+  "N400",
+  "I751 REGULAR",
+  "I751 ECB",
+  "I90",
+  "ASYLUM",
+];
+
+const CASE_STATUSES = ["ACTIVE", "FILED", "APPROVED"];
+
+export default function CreateClient({ onClientCreated }) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [myCaseLink, setMyCaseLink] = useState("");
+  const [caseType, setCaseType] = useState("");
+  const [caseStatus, setCaseStatus] = useState("");
+
+  // ✅ NEW: Case Title
+  const [caseTitle, setCaseTitle] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState({ open: false, type: "success", msg: "" });
+
+  // NEW: state to show the billing popup using the SAME InvoiceSection
+  const [billingOpen, setBillingOpen] = useState(false);
+  const [newClient, setNewClient] = useState(null); // full client object for InvoiceSection
+
+  const resetForm = () => {
+    setFirstName("");
+    setLastName("");
+    setMyCaseLink("");
+    setCaseType("");
+    setCaseStatus("");
+    setCaseTitle("");        // ✅ reset case title too
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
 
-    const newClient = {
-      firstName,
-      lastName,
-      myCaseLink,
+    const title = (caseTitle || "").trim();
+
+    const newClientBase = {
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      myCaseLink: myCaseLink.trim(),
       caseType,
       caseStatus,
-      createdAt: new Date().toISOString()
+      status: "active",     // default status for new client
+      payments: [],         // ensure the array exists for InvoiceSection
+      createdAt: new Date().toISOString(),
+      // ✅ include caseTitle only if provided (or keep empty string if you prefer)
+      ...(title ? { caseTitle: title } : { caseTitle: "" }),
     };
 
     try {
-      await addDoc(collection(db, 'clients'), newClient);
+      // 1) create basic client
+      const ref = await addDoc(collection(db, "clients"), newClientBase);
+
+      // 2) fetch full doc back (so we have id + fields exactly as stored)
+      const snap = await getDoc(doc(db, "clients", ref.id));
+      const full = { id: snap.id, ...snap.data() };
+      setNewClient(full);
+
+      // 3) open billing popup (this shows your InvoiceSection)
+      setBillingOpen(true);
+
       if (onClientCreated) onClientCreated();
-      setFirstName('');
-      setLastName('');
-      setMyCaseLink('');
-      setCaseType('');
-      setCaseStatus('');
+      resetForm();
+      setToast({ open: true, type: "success", msg: "Client created successfully." });
     } catch (error) {
-      console.error('Error adding client:', error);
+      console.error("Error adding client:", error);
+      setToast({ open: true, type: "error", msg: "Failed to create client." });
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} style={{ maxWidth: '600px', margin: 'auto' }}>
-      <h2>Create Client</h2>
-      <input
-        type="text"
-        placeholder="First Name"
-        value={firstName}
-        onChange={(e) => setFirstName(e.target.value)}
-        required
-        style={inputStyle}
-      />
-      <input
-        type="text"
-        placeholder="Last Name"
-        value={lastName}
-        onChange={(e) => setLastName(e.target.value)}
-        required
-        style={inputStyle}
-      />
-      <input
-        type="text"
-        placeholder="MyCase Link"
-        value={myCaseLink}
-        onChange={(e) => setMyCaseLink(e.target.value)}
-        required
-        style={inputStyle}
-      />
-      <select
-        value={caseType}
-        onChange={(e) => setCaseType(e.target.value)}
-        required
-        style={inputStyle}
+    <Box sx={{ px: 2, py: 3 }}>
+      <motion.div
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
       >
-        <option value="">Select Case Type</option>
-        <option value="VAWA SPOUSE">VAWA SPOUSE</option>
-        <option value="PARENT VAWA">PARENT VAWA</option>
-        <option value="CHILD VAWA">CHILD VAWA</option>
-        <option value="T VISA">T VISA</option>
-        <option value="U VISA">U VISA</option>
-        <option value="MARRIAGE AOS">MARRIAGE AOS</option>
-        <option value="N400">N400</option>
-        <option value="I751 REGULAR">I751 REGULAR</option>
-        <option value="I751 ECB">I751 ECB</option>
-        <option value="I90">I90</option>
-        <option value="ASYLUM">ASYLUM</option>
-      </select>
-      <select
-        value={caseStatus}
-        onChange={(e) => setCaseStatus(e.target.value)}
-        required
-        style={inputStyle}
+        <Card
+          sx={{
+            maxWidth: 720,
+            mx: "auto",
+            borderRadius: 3,
+            boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
+            border: "1px solid rgba(2,55,112,0.08)",
+          }}
+        >
+          <CardHeader
+            title="Create Client"
+            subheader="Add a new client to the collections system"
+            sx={{
+              pb: 0,
+              "& .MuiCardHeader-title": { fontWeight: 700 },
+              "& .MuiCardHeader-subheader": { color: "text.secondary" },
+            }}
+          />
+          <CardContent>
+            <Box component="form" onSubmit={handleSubmit} noValidate>
+              <Grid container spacing={2.5}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="First Name"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                    fullWidth
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Last Name"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                    fullWidth
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    label="MyCase Link"
+                    value={myCaseLink}
+                    onChange={(e) => setMyCaseLink(e.target.value)}
+                    required
+                    fullWidth
+                    placeholder="https://law-firm-of-moumita-rahman-pllc.mycase.com/..."
+                    helperText="Paste the client's MyCase profile link."
+                  />
+                </Grid>
+
+                {/* ✅ NEW: Case Title */}
+                <Grid item xs={12}>
+                  <TextField
+                    label="Case Title"
+                    value={caseTitle}
+                    onChange={(e) => setCaseTitle(e.target.value)}
+                    fullWidth
+                    placeholder="e.g., A (04-25) SCOTT, DONMAUR (SPOUSE I-360 + AOS) Buffalo"
+                    inputProps={{ maxLength: 200 }}
+                    helperText="Used to disambiguate clients with the same name. Shown as a compact tag in the list."
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    select
+                    label="Case Type"
+                    value={caseType}
+                    onChange={(e) => setCaseType(e.target.value)}
+                    required
+                    fullWidth
+                    SelectProps={{ native: true }}
+                  >
+                    <option value="" />
+                    {CASE_TYPES.map((ct) => (
+                      <option key={ct} value={ct}>
+                        {ct}
+                      </option>
+                    ))}
+                  </TextField>
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    select
+                    label="Case Stage"
+                    value={caseStatus}
+                    onChange={(e) => setCaseStatus(e.target.value)}
+                    required
+                    fullWidth
+                    SelectProps={{ native: true }}
+                  >
+                    <option value="" />
+                    {CASE_STATUSES.map((cs) => (
+                      <option key={cs} value={cs}>
+                        {cs}
+                      </option>
+                    ))}
+                  </TextField>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Stack direction="row" spacing={1.5} justifyContent="flex-end">
+                    <Button
+                      variant="outlined"
+                      onClick={resetForm}
+                      disabled={loading}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      disabled={loading}
+                      sx={{
+                        bgcolor: "#0b3a75",
+                        "&:hover": { bgcolor: "#092e5b" },
+                      }}
+                    >
+                      {loading ? "Saving..." : "Create Client"}
+                    </Button>
+                  </Stack>
+                </Grid>
+              </Grid>
+            </Box>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* Snackbar */}
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={3000}
+        onClose={() => setToast((t) => ({ ...t, open: false }))}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <option value="">Select Case Stage</option>
-        <option value="ACTIVE">ACTIVE</option>
-        <option value="FILED">FILED</option>
-        <option value="APPROVED">APPROVED</option>
-      </select>
-      <button type="submit" style={buttonStyle}>Create Client</button>
-    </form>
+        <Alert
+          onClose={() => setToast((t) => ({ ...t, open: false }))}
+          severity={toast.type}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
+          {toast.msg}
+        </Alert>
+      </Snackbar>
+
+      {/* 🔹 Billing Quick Setup using your existing InvoiceSection */}
+      <Dialog
+        open={billingOpen}
+        onClose={() => setBillingOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Setup Invoice</DialogTitle>
+        <DialogContent dividers>
+          {newClient && (
+            <InvoiceSection client={newClient} setClient={setNewClient} />
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBillingOpen(false)}>Done</Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 }
-
-const inputStyle = {
-  width: '100%',
-  padding: '10px',
-  margin: '8px 0',
-  boxSizing: 'border-box'
-};
-
-const buttonStyle = {
-  backgroundColor: '#007bff',
-  color: 'white',
-  padding: '10px 20px',
-  border: 'none',
-  borderRadius: '4px',
-  cursor: 'pointer',
-  marginTop: '10px'
-};
-
-export default CreateClient;

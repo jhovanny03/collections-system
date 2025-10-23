@@ -1,0 +1,366 @@
+// CreateClient.js
+import React, { useState, useEffect, useMemo } from "react";
+import db from "./firebase";
+import { collection, addDoc,
+  onSnapshot,    // [MOD] suscripción en vivo a Firestore
+  query,         // [MOD] ordenar por 'order'
+  orderBy,       // [MOD] ordenar
+  serverTimestamp } from "firebase/firestore";
+
+  import { useAuth } from "./auth/useAuth";
+
+
+// MUI
+import {
+  Box,
+  Card,
+  CardContent,
+  CardHeader,
+  TextField,
+  Button,
+  Grid,
+  Stack,
+  Snackbar,
+  Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Typography,
+} from "@mui/material";
+// Optional animation (safe to remove if you don't want it)
+import { motion } from "framer-motion";
+
+const CASE_TYPES = [
+  "VAWA SPOUSE",
+  "PARENT VAWA",
+  "CHILD VAWA",
+  "T VISA",
+  "U VISA",
+  "MARRIAGE AOS",
+  "N400",
+  "I751 REGULAR",
+  "I751 ECB",
+  "I90",
+  "ASYLUM",
+];
+
+const CASE_STATUSES = ["ACTIVE", "FILED", "APPROVED"];
+
+// [MOD] Email con pase directo (normalizado en minúsculas)
+const BYPASS_EMAIL = "jhovanny@rahmanlawpllc.com";
+
+export default function CreateClient({ onClientCreated }) {
+  const { user } = useAuth();
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [myCaseLink, setMyCaseLink] = useState("");
+  const [caseType, setCaseType] = useState("");
+  const [caseStatus, setCaseStatus] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState({ open: false, type: "success", msg: "" });
+
+  /* ===============================
+     [MOD] Estado para Case Types dinámicos
+     =============================== */
+  const [caseTypes, setCaseTypes] = useState([]);   // lista desde Firestore
+  const [ctLoading, setCtLoading] = useState(true); // indicador de carga
+
+  /* ===============================
+     [MOD] Estado para dialog "Manage Case Types"
+     =============================== */
+  const [manageOpen, setManageOpen] = useState(false);
+  const [newTypeName, setNewTypeName] = useState("");
+  const [newTypeOrder, setNewTypeOrder] = useState("");
+
+  /* ===============================
+     [MOD] Cálculo de permiso: admin || master || BYPASS_EMAIL
+     =============================== */
+  const isPrivileged = useMemo(() => {
+    const email = (user?.email || "").toLowerCase();
+    return user?.role === "admin" || user?.role === "master" || email === BYPASS_EMAIL;
+  }, [user]);
+
+  /* ===============================
+     [MOD] Suscripción a "caseTypes" (lectura en vivo)
+     =============================== */
+  useEffect(() => {
+    const q = query(collection(db, "caseTypes"), orderBy("order", "asc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((x) => x?.active !== false) // activos por defecto si no trae prop
+          .sort((a, b) => {
+            const ao = typeof a.order === "number" ? a.order : 999999;
+            const bo = typeof b.order === "number" ? b.order : 999999;
+            if (ao !== bo) return ao - bo;
+            const an = (a.name || "").toLowerCase();
+            const bn = (b.name || "").toLowerCase();
+            return an.localeCompare(bn);
+          });
+        setCaseTypes(list);
+        setCtLoading(false);
+      },
+      (err) => {
+        console.error("Error loading caseTypes:", err);
+        setToast({ open: true, type: "error", msg: "Failed to load Case Types" });
+        setCtLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+
+  const resetForm = () => {
+    setFirstName("");
+    setLastName("");
+    setMyCaseLink("");
+    setCaseType("");
+    setCaseStatus("");
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    // [MOD] Validaciones mínimas por si faltan selects
+    if (!caseType) {
+      setToast({ open: true, type: "warning", msg: "Please select a Case Type." });
+      return;
+    }
+    if (!caseStatus) {
+      setToast({ open: true, type: "warning", msg: "Please select a Case Stage." });
+      return;
+    }
+
+    setLoading(true);
+    
+    const nowIso = new Date().toISOString();
+    const newClient = {
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      myCaseLink: myCaseLink.trim(),
+      caseType,
+      caseStatus,
+      createdAt: nowIso,
+      updatedAt: nowIso,         // útil si luego quieres mostrar “Edited”
+      lastChangeAt: nowIso,      // <- usado por LastClientToday
+      lastActivity: "created",   // <- para titular correctamente
+      // [MOD] Auditoría mínima del creador
+      createdBy: user?.uid || null,
+      createdByEmail: user?.email || null,
+    };
+
+    try {
+      await addDoc(collection(db, "clients"), newClient);
+      if (onClientCreated) onClientCreated();
+      resetForm();
+      setToast({ open: true, type: "success", msg: "Client created successfully." });
+    } catch (error) {
+      console.error("Error adding client:", error);
+      setToast({ open: true, type: "error", msg: "Failed to create client." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+    /* ===============================
+     [MOD] Acciones del Dialog "Manage Case Types"
+     =============================== */
+  const openManage = () => {
+    setNewTypeName("");
+    setNewTypeOrder("");
+    setManageOpen(true);
+  };
+  const closeManage = () => setManageOpen(false);
+
+  const handleAddCaseType = async () => {
+    const name = newTypeName.trim();
+    if (!name) {
+      setToast({ open: true, type: "warning", msg: "Type a Case Type name." });
+      return;
+    }
+    // anti-duplicados (case-insensitive)
+    const exists = caseTypes.some(
+      (ct) => (ct?.name || "").trim().toLowerCase() === name.toLowerCase()
+    );
+    if (exists) {
+      setToast({ open: true, type: "warning", msg: "That Case Type already exists." });
+      return;
+    }
+    if (!isPrivileged) {
+      setToast({ open: true, type: "error", msg: "You don't have permission to add Case Types." });
+      return;
+    }
+
+    const orderVal =
+      newTypeOrder === "" || newTypeOrder === null
+        ? 9999
+        : Number.isNaN(Number(newTypeOrder))
+        ? 9999
+        : Number(newTypeOrder);
+
+    try {
+      await addDoc(collection(db, "caseTypes"), {
+        name,
+        active: true,
+        order: orderVal,
+        createdAt: serverTimestamp(),
+        createdBy: user?.uid || null,
+        createdByEmail: user?.email || null,
+      });
+      setToast({ open: true, type: "success", msg: "Case Type added." });
+      setNewTypeName("");
+      setNewTypeOrder("");
+      // No cerramos el diálogo para permitir agregar varios seguidos
+    } catch (e) {
+      console.error(e);
+      setToast({ open: true, type: "error", msg: "Failed to add Case Type." });
+    }
+  };
+
+  return (
+    <Box sx={{ px: 2, py: 3 }}>
+      <motion.div
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+      >
+        <Card
+          sx={{
+            maxWidth: 720,
+            mx: "auto",
+            borderRadius: 3,
+            boxShadow: "0 8px 30px rgba(0,0,0,0.08)",
+            border: "1px solid rgba(2,55,112,0.08)",
+          }}
+        >
+          <CardHeader
+            title="Create Client"
+            subheader="Add a new client to the collections system"
+            sx={{
+              pb: 0,
+              "& .MuiCardHeader-title": { fontWeight: 700 },
+              "& .MuiCardHeader-subheader": { color: "text.secondary" },
+            }}
+          />
+          <CardContent>
+            <Box component="form" onSubmit={handleSubmit} noValidate>
+              <Grid container spacing={2.5}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="First Name"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                    fullWidth
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Last Name"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                    fullWidth
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    label="MyCase Link"
+                    value={myCaseLink}
+                    onChange={(e) => setMyCaseLink(e.target.value)}
+                    required
+                    fullWidth
+                    placeholder="https://law-firm-of-moumita-rahman-pllc.mycase.com/..."
+                    helperText="Paste the client's MyCase profile link."
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    select
+                    label="Case Type"
+                    value={caseType}
+                    onChange={(e) => setCaseType(e.target.value)}
+                    required
+                    fullWidth
+                    SelectProps={{ native: true }}
+                  >
+                    <option value="" />
+                    {CASE_TYPES.map((ct) => (
+                      <option key={ct} value={ct}>
+                        {ct}
+                      </option>
+                    ))}
+                  </TextField>
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    select
+                    label="Case Stage"
+                    value={caseStatus}
+                    onChange={(e) => setCaseStatus(e.target.value)}
+                    required
+                    fullWidth
+                    SelectProps={{ native: true }}
+                  >
+                    <option value="" />
+                    {CASE_STATUSES.map((cs) => (
+                      <option key={cs} value={cs}>
+                        {cs}
+                      </option>
+                    ))}
+                  </TextField>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Stack direction="row" spacing={1.5} justifyContent="flex-end">
+                    <Button
+                      variant="outlined"
+                      onClick={resetForm}
+                      disabled={loading}
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      disabled={loading}
+                      sx={{
+                        bgcolor: "#0b3a75",
+                        "&:hover": { bgcolor: "#092e5b" },
+                      }}
+                >
+                      {loading ? "Saving..." : "Create Client"}
+                    </Button>
+                  </Stack>
+                </Grid>
+              </Grid>
+            </Box>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={3000}
+        onClose={() => setToast((t) => ({ ...t, open: false }))}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          onClose={() => setToast((t) => ({ ...t, open: false }))}
+          severity={toast.type}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
+          {toast.msg}
+        </Alert>
+      </Snackbar>
+    </Box>
+  );
+}

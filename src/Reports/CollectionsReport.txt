@@ -1,0 +1,508 @@
+// src/Reports/CollectionsReport.js
+import React, { useMemo, useState } from "react";
+import {
+  Card, CardHeader, CardContent, Box, Stack, TextField, MenuItem,
+  Button, FormControlLabel, Switch, Divider
+} from "@mui/material";
+import * as XLSX from "xlsx";
+
+// ✅ Headline & chart are still driven by your fixed utility
+import { computeCollectionsByPeriod } from "./utils/collectionsCompute";
+
+import CollectionsSummary from "./components/CollectionsSummary";
+import CollectionsPeriodChart from "./components/CollectionsPeriodChart";
+import {
+  ByPeriodTable,
+  ByCaseTypeTable,
+  ByClientTable
+} from "./components/CollectionsTables";
+
+const GROUPINGS = ["Day", "Week", "Month"];
+const QUICK = [
+  { key: "MTD", label: "MTD" },
+  { key: "QTD", label: "QTD" },
+  { key: "YTD", label: "YTD" },
+  { key: "30D", label: "Last 30d" },
+];
+
+export default function CollectionsReport({ clients = [] }) {
+  const [from, setFrom] = useState(() => toYMD(startOfMonth(new Date())));
+  const [to, setTo] = useState(() => toYMD(new Date()));
+  const [groupBy, setGroupBy] = useState("Month"); // chart stays monthly for now
+  const [caseType, setCaseType] = useState("Any");
+  const [caseStatus, setCaseStatus] = useState("Any");
+  const [billingStatus, setBillingStatus] = useState("Any");
+  const [dense, setDense] = useState(true);
+
+  const caseTypes = useMemo(() => {
+    const set = new Set();
+    clients.forEach((c) => c.caseType && set.add(c.caseType));
+    return ["Any", ...Array.from(set)];
+  }, [clients]);
+
+  // Basic row-level filtering before any computation
+  const filteredClients = useMemo(() => {
+    return (clients || []).filter((c) => {
+      if (caseType !== "Any" && (c.caseType || "") !== caseType) return false;
+      if (caseStatus !== "Any" && (c.caseStatus || "") !== caseStatus) return false;
+
+      if (billingStatus !== "Any") {
+        const s = (c.billingStatus || c.status || "active").toLowerCase();
+        if (billingStatus.toLowerCase() !== s) return false;
+      }
+      return true;
+    });
+  }, [clients, caseType, caseStatus, billingStatus]);
+
+  // 👉 Headline KPIs & chart (unchanged logic)
+  const computed = useMemo(() => {
+    const start = startOfMonth(new Date(from));
+    const end = startOfMonth(new Date(to));
+    return computeCollectionsByPeriod(filteredClients, start, end);
+  }, [filteredClients, from, to]);
+
+  // 👉 Per-client allocator for the two extra breakdowns.
+  //    This does NOT affect the headline compute above.
+  const { byClientRows, byCaseTypeRows } = useMemo(() => {
+    const rangeStart = startOfMonth(new Date(from));
+    const rangeEnd = startOfMonth(new Date(to)); // monthly grain
+    const byClient = [];
+    const byCaseTypeAcc = new Map();
+
+    for (const c of filteredClients) {
+      const alloc = allocateClientByDueMonth(c, rangeStart, rangeEnd);
+
+      // Roll up for this client inside range
+      let expected = 0;
+      let collected = 0;
+      for (const [ym, rec] of alloc.months.entries()) {
+        if (monthInRange(ym, rangeStart, rangeEnd)) {
+          expected += rec.expected;
+          collected += rec.collected;
+        }
+      }
+      const variance = expected - collected;
+
+      byClient.push({
+        id: c.id,
+        name: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.id,
+        caseType: c.caseType || "—",
+        status: (c.billingStatus || c.status || "active").toLowerCase(),
+        expected,
+        actual: collected,
+        variance,
+        lastPaymentDate: lastPaymentDate(c),
+      });
+
+      // Accumulate by case type
+      const key = c.caseType || "—";
+      const prev = byCaseTypeAcc.get(key) || { caseType: key, expected: 0, actual: 0, variance: 0, clients: 0 };
+      prev.expected += expected;
+      prev.actual += collected;
+      prev.variance = prev.expected - prev.actual;
+      prev.clients += 1;
+      byCaseTypeAcc.set(key, prev);
+    }
+
+    // Sort for nice display
+    byClient.sort((a, b) => (b.expected - b.actual) - (a.expected - a.actual));
+
+    const byCaseType = Array.from(byCaseTypeAcc.values()).sort((a, b) => b.expected - a.expected);
+
+    return { byClientRows: byClient, byCaseTypeRows: byCaseType };
+  }, [filteredClients, from, to]);
+
+  // Adapt to your child component shapes
+  const data = useMemo(() => {
+    const rows = (computed?.rows || []).map((r) => ({
+      label: r.label,
+      expected: r.expected,
+      actual: r.collected,
+      variance: r.variance,
+      ratePct: r.collectionRate,
+      excess: r.excessCollected,
+    }));
+
+    const totals = computed?.totals || {
+      expected: 0,
+      collected: 0,
+      variance: 0,
+      excessCollected: 0,
+      collectionRate: 0,
+    };
+
+    return {
+      byPeriod: rows,
+      byCaseType: byCaseTypeRows.map((r) => ({
+        ...r,
+        ratePct: r.expected > 0 ? Math.min(100, (r.actual / r.expected) * 100) : 0,
+      })),
+      byClient: byClientRows.map((r) => ({
+        ...r,
+        ratePct: r.expected > 0 ? Math.min(100, (r.actual / r.expected) * 100) : 0,
+      })),
+      totals: {
+        expected: totals.expected,
+        actual: totals.collected,
+        variance: totals.variance,
+        ratePct: totals.collectionRate,
+        excess: totals.excessCollected,
+      },
+    };
+  }, [computed, byCaseTypeRows, byClientRows]);
+
+  const exportGrid = () => {
+    const wb = XLSX.utils.book_new();
+
+    // Summary
+    const sumSheet = XLSX.utils.json_to_sheet([
+      {
+        From: from,
+        To: to,
+        "Expected (Range)": data?.totals?.expected || 0,
+        "Actual (Range)": data?.totals?.actual || 0,
+        Variance: data?.totals?.variance || 0,
+        "Collection Rate % (capped)": data?.totals?.ratePct || 0,
+        "Excess Collected": data?.totals?.excess || 0,
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, sumSheet, "Summary");
+
+    // By Period
+    const byPeriod = (data?.byPeriod || []).map((r) => ({
+      Period: r.label,
+      Expected: r.expected,
+      Actual: r.actual,
+      Variance: r.variance,
+      "Rate % (capped)": r.ratePct,
+      "Excess Collected": r.excess,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byPeriod), "ByPeriod");
+
+    // By CaseType
+    const byCT = (data?.byCaseType || []).map((r) => ({
+      "Case Type": r.caseType || "—",
+      Expected: r.expected,
+      Actual: r.actual,
+      Variance: r.variance,
+      "Rate % (capped)": r.ratePct,
+      Clients: r.clients,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byCT), "ByCaseType");
+
+    // By Client
+    const byClient = (data?.byClient || []).map((r) => ({
+      Client: r.name,
+      "Case Type": r.caseType || "—",
+      Billing: (r.status || "active").toUpperCase(),
+      Expected: r.expected,
+      Actual: r.actual,
+      Variance: r.variance,
+      "Rate % (capped)": r.ratePct,
+      "Last Payment": r.lastPaymentDate || "—",
+      "Client ID": r.id,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byClient), "ByClient");
+
+    XLSX.writeFile(wb, `collections_${from}_${to}.xlsx`);
+  };
+
+  const applyQuick = (key) => {
+    const d = new Date();
+    if (key === "MTD") {
+      setFrom(toYMD(startOfMonth(d)));
+      setTo(toYMD(d));
+    } else if (key === "QTD") {
+      setFrom(toYMD(startOfQuarter(d)));
+      setTo(toYMD(d));
+    } else if (key === "YTD") {
+      setFrom(`${d.getFullYear()}-01-01`);
+      setTo(toYMD(d));
+    } else if (key === "30D") {
+      const p = new Date(d);
+      p.setDate(p.getDate() - 30);
+      setFrom(toYMD(p));
+      setTo(toYMD(d));
+    }
+  };
+
+  return (
+    <Card sx={{ borderRadius: 3 }}>
+      <CardHeader
+        title="Collections"
+        subheader="Cash received vs expected installments for a selected period. Payments are allocated to the original due month (oldest-first). Monthly collection rate is capped at 100%; any overage is tracked as Excess."
+        sx={{ "& .MuiCardHeader-title": { fontWeight: 700 }, pb: 0 }}
+      />
+      <CardContent>
+        {/* Filters */}
+        <Stack
+          direction={{ xs: "column", md: "row" }}
+          spacing={2}
+          alignItems={{ xs: "stretch", md: "center" }}
+          sx={{ mb: 2 }}
+        >
+          <TextField
+            label="From"
+            type="date"
+            size="small"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+            sx={{ minWidth: 160 }}
+          />
+          <TextField
+            label="To"
+            type="date"
+            size="small"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+            sx={{ minWidth: 160 }}
+          />
+          <TextField
+            select
+            label="Group By"
+            size="small"
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value)}
+            sx={{ minWidth: 140 }}
+          >
+            {GROUPINGS.map((g) => (
+              <MenuItem key={g} value={g}>
+                {g}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            label="Case Type"
+            size="small"
+            value={caseType}
+            onChange={(e) => setCaseType(e.target.value)}
+            sx={{ minWidth: 180 }}
+          >
+            {caseTypes.map((t) => (
+              <MenuItem key={t} value={t}>
+                {t}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            label="Case Status"
+            size="small"
+            value={caseStatus}
+            onChange={(e) => setCaseStatus(e.target.value)}
+            sx={{ minWidth: 160 }}
+          >
+            {["Any", "ACTIVE", "FILED", "APPROVED"].map((s) => (
+              <MenuItem key={s} value={s}>
+                {s}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <TextField
+            select
+            label="Billing Status"
+            size="small"
+            value={billingStatus}
+            onChange={(e) => setBillingStatus(e.target.value)}
+            sx={{ minWidth: 160 }}
+          >
+            {["Any", "Active", "Paused", "Closed"].map((s) => (
+              <MenuItem key={s} value={s}>
+                {s}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          <Box flexGrow={1} />
+
+          <FormControlLabel
+            control={<Switch checked={dense} onChange={(e) => setDense(e.target.checked)} />}
+            label="Dense rows"
+          />
+
+          <Button variant="outlined" onClick={exportGrid}>
+            Export XLSX
+          </Button>
+        </Stack>
+
+        {/* Quick range chips */}
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap">
+          {QUICK.map((q) => (
+            <Button key={q.key} size="small" variant="outlined" onClick={() => applyQuick(q.key)}>
+              {q.label}
+            </Button>
+          ))}
+        </Stack>
+
+        {/* KPIs */}
+        <CollectionsSummary totals={data?.totals} />
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* Chart */}
+        <CollectionsPeriodChart byPeriod={data?.byPeriod || []} />
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* Tables */}
+        <Box sx={{ display: "grid", gap: 2 }}>
+          <ByPeriodTable rows={data?.byPeriod || []} dense={dense} />
+          <ByCaseTypeTable rows={data?.byCaseType || []} dense={dense} />
+          <ByClientTable rows={data?.byClient || []} dense={dense} />
+        </Box>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ======================
+   Per-client allocation
+   ====================== */
+
+// Build the per-client due-month ledger and allocate payments oldest-first.
+function allocateClientByDueMonth(client, rangeStart, rangeEnd) {
+  const status = (client.billingStatus || client.status || "active").toLowerCase();
+  const isClosed = status === "closed";
+
+  // Dates
+  const firstInstallmentRaw = client.firstInstallmentDate;
+  if (!firstInstallmentRaw) return { months: new Map() };
+
+  const firstInstallmentDate =
+    firstInstallmentRaw?.seconds
+      ? new Date(firstInstallmentRaw.seconds * 1000)
+      : new Date(firstInstallmentRaw);
+
+  // due on the 15th
+  const firstDue = new Date(firstInstallmentDate.getFullYear(), firstInstallmentDate.getMonth(), 15);
+
+  // Pause logic (stop accruing on/after pause month)
+  const pauseStart = client.pauseStartedAt
+    ? (client.pauseStartedAt?.seconds
+        ? new Date(client.pauseStartedAt.seconds * 1000)
+        : new Date(client.pauseStartedAt))
+    : null;
+  const pauseCutoffYM = pauseStart ? ymKey(new Date(pauseStart.getFullYear(), pauseStart.getMonth(), 1)) : null;
+
+  // Skip logic (array of "YYYY-MM")
+  const skipSet = new Set((client.skipMonths || []).map(String));
+
+  // Schedule
+  const schedule = (client.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const getInstallmentAmountFor = (date) => {
+    for (const s of schedule) {
+      const sStart = new Date(s.start);
+      const sEnd = new Date(s.end);
+      if (date >= sStart && date <= sEnd) return Number(s.amount || 0);
+    }
+    return Number(client.installmentAmount || 500);
+  };
+
+  // Build due months from firstDue up to rangeEnd (monthly)
+  const months = new Map(); // ym -> { expected, collected }
+  if (!isClosed) {
+    const cursor = new Date(firstDue);
+    const hardEnd = new Date(rangeEnd);
+    hardEnd.setMonth(hardEnd.getMonth() + 1); // include end month generation
+
+    while (cursor < hardEnd) {
+      const ym = ymKey(cursor);
+
+      // Pause cut: if paused and this month is on/after pause month, do not accrue expected
+      const pausedMonth = pauseCutoffYM && ym >= pauseCutoffYM;
+
+      // Skipped month?
+      const skipped = skipSet.has(ym);
+
+      const expected = pausedMonth || skipped ? 0 : getInstallmentAmountFor(cursor);
+      months.set(ym, { expected, collected: 0 });
+
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  // Payments after initial date only
+  const initialPayDate = client.initialPaymentDate ? new Date(client.initialPaymentDate) : null;
+  const rawPayments = (client.payments || [])
+    .filter((p) => {
+      const d = new Date(p.date);
+      return initialPayDate ? d > initialPayDate : true;
+    })
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map((p) => ({ amount: Number(p.amount || 0), date: new Date(p.date) }));
+
+  // Allocate oldest-first over ALL months from firstDue forward
+  // (we must include months before rangeStart, because early months affect what remains unpaid later)
+  const allocKeys = Array.from(months.keys()).sort();
+  for (const pay of rawPayments) {
+    let remaining = pay.amount;
+    for (const ym of allocKeys) {
+      if (remaining <= 0) break;
+
+      // Only allocate up to expected for that month
+      const rec = months.get(ym);
+      if (!rec) continue;
+
+      const cap = Math.max(0, rec.expected - rec.collected);
+      if (cap <= 0) continue;
+
+      const take = Math.min(cap, remaining);
+      rec.collected += take;
+      remaining -= take;
+    }
+  }
+
+  // Cap each month (already ensured) and we're done
+  return { months };
+}
+
+/* --------- small helpers ---------- */
+function lastPaymentDate(client) {
+  const arr = client.payments || [];
+  if (!arr.length) return null;
+  const latest = arr.reduce((acc, p) => (new Date(p.date) > new Date(acc.date) ? p : acc));
+  try {
+    return new Date(latest.date).toISOString().slice(0, 10);
+  } catch {
+    return null;
+  }
+}
+
+function ymKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+function monthInRange(ym, start, end) {
+  const s = ymKey(start);
+  const e = ymKey(end);
+  // include end month
+  const endPlus = new Date(end);
+  endPlus.setMonth(endPlus.getMonth() + 1);
+  const ePlus = ymKey(endPlus);
+  return ym >= s && ym < ePlus;
+}
+
+/* --------- date helpers already in your file ---------- */
+function toYMD(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function startOfMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+function startOfQuarter(d) {
+  const q = Math.floor(d.getMonth() / 3) * 3;
+  return new Date(d.getFullYear(), q, 1);
+}

@@ -8,7 +8,10 @@ import RecordPayment from "./RecordPayment";
 import PaymentArrangement from "./PaymentArrangement";
 import CommunicationLog from "./CommunicationLog";
 import PaymentPromise from "./PaymentPromise";
-import LetterGenerator from "./LetterGenerator"; // ✅ Import
+import InstallmentSettings from "./InstallmentSettings";
+import InvoiceAdjustments from "./InvoiceAdjustments";
+import ClientActions from "./ClientActions";
+import LetterDrafter from "./LetterDrafter";
 
 function ClientDashboard() {
   const { clientId } = useParams();
@@ -32,14 +35,34 @@ function ClientDashboard() {
 
   return (
     <div style={{ padding: "2rem", maxWidth: "900px", margin: "auto" }}>
-      <h2>Client Dashboard</h2>
+      {/* Case title section */}
+      <h2
+        style={{
+          fontSize: "1.8rem", // ~10% smaller than before
+          fontWeight: "700",
+          marginBottom: "1.5rem",
+          textAlign: "center",
+        }}
+      >
+        {client.caseTitle || `${client.firstName || ""} ${client.lastName || ""}`}
+      </h2>
+
+      {/* Action buttons (Pause / Skip / Close) */}
+      <ClientActions client={client} setClient={setClient} />
+
       <BillingOverview client={client} />
+
+      <InvoiceAdjustments client={client} setClient={setClient} />
       <InvoiceSection client={client} setClient={setClient} />
+      <InstallmentSettings client={client} setClient={setClient} />
       <RecordPayment client={client} setClient={setClient} />
-      <PaymentArrangement client={client} setClient={setClient} />
+      {/* <PaymentArrangement client={client} setClient={setClient} /> */}
+
       <PaymentPromise client={client} setClient={setClient} />
       <CommunicationLog client={client} setClient={setClient} />
-      <LetterGenerator client={client} /> {/* ✅ Show Letter Generator */}
+
+      {/* Letter drafter */}
+      <LetterDrafter client={client} />
     </div>
   );
 }

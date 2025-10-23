@@ -1,42 +1,25 @@
-import React from "react";
-import { Card, CardContent, Typography } from "@mui/material";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
+import React from 'react';
+import DashboardCard from './DashboardCard';
+import { PieChart } from '@mui/x-charts/PieChart';
 
-const CasesByStatus = () => {
-  const data = [
-    { status: "Active", value: 60 },
-    { status: "Filed", value: 25 },
-    { status: "Approved", value: 15 },
-  ];
-  const COLORS = ["#3b82f6", "#10b981", "#f59e0b"];
+const data = [
+  { id: 0, label: 'Active', value: 60 },
+  { id: 1, label: 'Filed', value: 25 },
+  { id: 2, label: 'Approved', value: 15 },
+];
 
+export default function CasesByStatus() {
   return (
-    <Card sx={{ bgcolor: "background.paper", boxShadow: 3, borderRadius: 2 }}>
-      <CardContent>
-        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-          Cases by Status
-        </Typography>
-        <ResponsiveContainer width="100%" height={300}>
-          <PieChart>
-            <Pie
-              data={data}
-              dataKey="value"
-              nameKey="status"
-              cx="50%"
-              cy="50%"
-              outerRadius={100}
-              label
-            >
-              {data.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={COLORS[index]} />
-              ))}
-            </Pie>
-            <Tooltip />
-          </PieChart>
-        </ResponsiveContainer>
-      </CardContent>
-    </Card>
+    <DashboardCard title="Cases by Status">
+      <PieChart
+        height={280}
+        series={[{
+          data,
+          innerRadius: 0,
+          outerRadius: 90,
+          paddingAngle: 2,
+        }]}
+      />
+    </DashboardCard>
   );
-};
-
-export default CasesByStatus;
+}

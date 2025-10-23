@@ -1,211 +1,379 @@
-import React, { useState } from 'react';
-import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
-import db from './firebase';
+// InvoiceSection.js
+import React, { useState } from "react";
+import { doc, updateDoc } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
+import db from "./firebase";
+import {
+  Button,
+  TextField,
+  Typography,
+  Box,
+  Snackbar,
+  Alert,
+  Slide,
+  Card,
+  CardContent,
+} from "@mui/material";
+import { motion } from "framer-motion";
 
 export default function InvoiceSection({ client, setClient }) {
-  const [invoiceInput, setInvoiceInput] = useState('');
-  const [initialPaymentInput, setInitialPaymentInput] = useState('');
-  const [initialPaymentDate, setInitialPaymentDate] = useState('');
-  const [firstInstallmentDate, setFirstInstallmentDate] = useState('');
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [editMode, setEditMode] = useState(false);
+  const [invoiceInput, setInvoiceInput] = useState("");
+  const [initialPaymentInput, setInitialPaymentInput] = useState("");
+  const [initialPaymentDate, setInitialPaymentDate] = useState("");
+  const [firstInstallmentDate, setFirstInstallmentDate] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('default', { year: 'numeric', month: 'long', day: 'numeric' });
+  // ---- Date helpers ----
+  const parseLocalYMD = (s) => {
+    const [y, m, d] = s.split("-").map(Number);
+    return new Date(y, m - 1, d);
   };
+
+  const parseDateFlexible = (value) => {
+    if (!value) return null;
+    if (typeof value === "object" && value.seconds) {
+      return new Date(value.seconds * 1000);
+    }
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return parseLocalYMD(value);
+    }
+    return new Date(value);
+  };
+
+  const formatDate = (value) => {
+    const date = parseDateFlexible(value);
+    if (!date || isNaN(date)) return "N/A";
+    return date.toLocaleDateString("default", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  };
+
+  const formatMoney = (amount) =>
+    `$${Number(amount || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+    })}`;
 
   const handleSaveInvoiceAndInitialPayment = async () => {
     const invoice = parseFloat(invoiceInput);
     const initial = parseFloat(initialPaymentInput);
 
     if (
-      !invoiceInput || !initialPaymentInput ||
-      !initialPaymentDate || !firstInstallmentDate ||
-      isNaN(invoice) || isNaN(initial) ||
-      invoice <= 0 || initial <= 0
+      !invoiceInput ||
+      !initialPaymentInput ||
+      !initialPaymentDate ||
+      !firstInstallmentDate ||
+      isNaN(invoice) ||
+      isNaN(initial) ||
+      invoice <= 0 ||
+      initial <= 0
     ) {
-      setError('Please fill in all fields and ensure values are greater than zero.');
-      setSuccess('');
-      return;
-    }
-
-    const paymentExists = (client.payments || []).some(p => p.date === initialPaymentDate);
-    if (paymentExists) {
-      setError('A payment already exists for the selected date.');
-      setSuccess('');
+      setError(
+        "Please fill in all fields and ensure values are greater than zero."
+      );
       return;
     }
 
     const auth = getAuth();
     const user = auth.currentUser;
-    const username = user?.displayName || user?.email || 'Anonymous';
+    const username = user?.displayName || user?.email || "Anonymous";
+    const whenIso = new Date().toISOString();
 
-    const clientRef = doc(db, 'clients', client.id);
-    const newPayment = {
+    const clientRef = doc(db, "clients", client.id);
+
+    // Build/replace the initial payment record
+    const prevPayments = Array.isArray(client.payments) ? [...client.payments] : [];
+
+    // Prefer to find a payment explicitly marked as initial
+    let idx = prevPayments.findIndex((p) => p?.kind === "initial");
+
+    // Fallback: find a payment with the client's current initialPaymentDate (old records)
+    if (idx === -1 && client.initialPaymentDate) {
+      idx = prevPayments.findIndex((p) => p?.date === client.initialPaymentDate);
+    }
+
+    const updatedInitialPayment = {
       amount: initial,
-      date: initialPaymentDate,
-      recordedAt: new Date().toISOString()
+      date: initialPaymentDate,   // YYYY-MM-DD
+      recordedAt: whenIso,
+      kind: "initial",            // <-- marker so we can reliably find it later
     };
 
-    await updateDoc(clientRef, {
-      invoiceTotal: invoice,
-      initialPaymentDate,
-      firstInstallmentDate,
-      payments: arrayUnion(newPayment),
-      invoiceUpdatedBy: username,
-      invoiceUpdatedAt: new Date().toISOString()
-    });
+    let nextPayments;
+    if (idx >= 0) {
+      // Replace existing initial payment
+      nextPayments = [...prevPayments];
+      nextPayments[idx] = { ...prevPayments[idx], ...updatedInitialPayment };
+    } else {
+      // Add a new initial payment
+      nextPayments = [...prevPayments, updatedInitialPayment];
+    }
 
-    setClient(prev => ({
-      ...prev,
-      invoiceTotal: invoice,
-      initialPaymentDate,
-      firstInstallmentDate,
-      invoiceUpdatedBy: username,
-      invoiceUpdatedAt: new Date().toISOString(),
-      payments: [...(prev.payments || []), newPayment]
-    }));
+    try {
+      await updateDoc(clientRef, {
+        invoiceTotal: invoice,
+        initialPaymentAmount: initial,
+        initialPaymentDate,
+        firstInstallmentDate,
+        payments: nextPayments,            // <-- replace entire array (edit-safe)
+        invoiceUpdatedBy: username,
+        invoiceUpdatedAt: whenIso,
+      });
 
-    setInvoiceInput('');
-    setInitialPaymentInput('');
-    setInitialPaymentDate('');
-    setFirstInstallmentDate('');
-    setError('');
-    setSuccess('✅ Invoice and initial payment saved successfully!');
-    setEditMode(false);
+      setClient((prev) => ({
+        ...prev,
+        invoiceTotal: invoice,
+        initialPaymentAmount: initial,
+        initialPaymentDate,
+        firstInstallmentDate,
+        invoiceUpdatedBy: username,
+        invoiceUpdatedAt: whenIso,
+        payments: nextPayments,
+      }));
 
-    setTimeout(() => setSuccess(''), 4000);
+      setInvoiceInput("");
+      setInitialPaymentInput("");
+      setInitialPaymentDate("");
+      setFirstInstallmentDate("");
+      setDrawerOpen(false);
+      setError("");
+      setSuccess(true);
+    } catch (e) {
+      console.error(e);
+      setError("Failed to save. Please try again.");
+    }
   };
 
   const handleDeleteInvoice = async () => {
-    const confirmDelete = window.confirm('Are you sure you want to delete this invoice and initial payment info?');
+    const confirmDelete = window.confirm(
+      "Are you sure you want to delete this invoice and initial payment info?"
+    );
     if (!confirmDelete) return;
 
-    const clientRef = doc(db, 'clients', client.id);
-    await updateDoc(clientRef, {
-      invoiceTotal: null,
-      initialPaymentDate: null,
-      firstInstallmentDate: null,
-      invoiceUpdatedBy: null,
-      invoiceUpdatedAt: null
-    });
+    const clientRef = doc(db, "clients", client.id);
 
-    setClient(prev => ({
-      ...prev,
-      invoiceTotal: null,
-      initialPaymentDate: null,
-      firstInstallmentDate: null,
-      invoiceUpdatedBy: null,
-      invoiceUpdatedAt: null
-    }));
+    // Also remove the initial payment from payments
+    const prevPayments = Array.isArray(client.payments) ? client.payments : [];
+    const filtered = prevPayments.filter(
+      (p) =>
+        // remove explicit 'initial'
+        p?.kind !== "initial" &&
+        // and also remove any payment that matches the stored initialPaymentDate (legacy)
+        p?.date !== client.initialPaymentDate
+    );
 
-    setSuccess('🗑️ Invoice and initial payment removed.');
-    setEditMode(false);
+    try {
+      await updateDoc(clientRef, {
+        invoiceTotal: null,
+        initialPaymentAmount: null,
+        initialPaymentDate: null,
+        firstInstallmentDate: null,
+        invoiceUpdatedBy: null,
+        invoiceUpdatedAt: null,
+        payments: filtered, // <-- keep the rest; initial payment removed
+      });
 
-    setTimeout(() => setSuccess(''), 4000);
+      setClient((prev) => ({
+        ...prev,
+        invoiceTotal: null,
+        initialPaymentAmount: null,
+        initialPaymentDate: null,
+        firstInstallmentDate: null,
+        invoiceUpdatedBy: null,
+        invoiceUpdatedAt: null,
+        payments: filtered,
+      }));
+
+      setDrawerOpen(false);
+      setSuccess(true);
+    } catch (e) {
+      console.error(e);
+      setError("Failed to delete invoice. Please try again.");
+    }
   };
 
-  const showForm = editMode || !client.invoiceTotal;
-
   return (
-    <div style={{ marginBottom: '2rem' }}>
-      <h3>Setup Invoice and Initial Payment</h3>
+    <motion.div
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      style={{ marginBottom: "2rem" }}
+    >
+      <Card elevation={3} sx={{ borderRadius: 3 }}>
+        <CardContent>
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
+            📋 Setup Invoice and Initial Payment
+          </Typography>
 
-      {error && (
-        <div style={{ marginBottom: '10px', color: 'red', fontWeight: 'bold' }}>
-          ❌ {error}
-        </div>
-      )}
-
-      {success && (
-        <div style={{ marginBottom: '10px', color: 'green', fontWeight: 'bold' }}>
-          {success}
-        </div>
-      )}
-
-      {showForm ? (
-        <>
-          <input
-            type="number"
-            placeholder="Invoice Total"
-            value={invoiceInput}
-            onChange={(e) => setInvoiceInput(e.target.value)}
-            style={{ width: '100%', marginBottom: '8px', padding: '8px' }}
-          />
-          <input
-            type="number"
-            placeholder="Initial Payment"
-            value={initialPaymentInput}
-            onChange={(e) => setInitialPaymentInput(e.target.value)}
-            style={{ width: '100%', marginBottom: '8px', padding: '8px' }}
-          />
-          <label>Initial Payment Date:</label>
-          <input
-            type="date"
-            value={initialPaymentDate}
-            onChange={(e) => setInitialPaymentDate(e.target.value)}
-            style={{ width: '100%', marginBottom: '8px', padding: '8px' }}
-          />
-          <label>First Installment Starts On:</label>
-          <input
-            type="date"
-            value={firstInstallmentDate}
-            onChange={(e) => setFirstInstallmentDate(e.target.value)}
-            style={{ width: '100%', marginBottom: '8px', padding: '8px' }}
-          />
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              onClick={handleSaveInvoiceAndInitialPayment}
-              style={{ padding: '8px 16px', backgroundColor: '#6f42c1', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-            >
-              Save Invoice & Initial Payment
-            </button>
-            <button
-              onClick={() => {
-                setEditMode(false);
-                setInvoiceInput('');
-                setInitialPaymentInput('');
-                setInitialPaymentDate('');
-                setFirstInstallmentDate('');
-                setError('');
-                setSuccess('');
+          {!client.invoiceTotal ? (
+            <Typography color="text.secondary" mb={2}>
+              No invoice information saved.
+            </Typography>
+          ) : (
+            <Box
+              sx={{
+                backgroundColor: "#f8f9fa",
+                p: 2,
+                borderRadius: 2,
+                mb: 2,
               }}
-              style={{ padding: '8px 16px', backgroundColor: '#6c757d', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
             >
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <div style={{ marginTop: '1rem', fontStyle: 'italic', backgroundColor: '#f8f9fa', padding: '1rem', borderRadius: '6px' }}>
-            <h4>📋 Current Invoice Overview</h4>
-            <p><strong>Invoice Total:</strong> ${parseFloat(client.invoiceTotal).toFixed(2)}</p>
-            <p><strong>Initial Payment Date:</strong> {formatDate(client.initialPaymentDate)}</p>
-            <p><strong>Installments Start On:</strong> {formatDate(client.firstInstallmentDate)}</p>
-            <p><strong>Last Edited By:</strong> {client.invoiceUpdatedBy || 'Unknown'}</p>
-            <p><strong>Last Updated At:</strong> {formatDate(client.invoiceUpdatedAt)}</p>
-          </div>
-          <div style={{ marginTop: '1rem' }}>
-            <button
-              onClick={() => setEditMode(true)}
-              style={{ marginRight: '10px', backgroundColor: '#ffc107', color: '#000', padding: '8px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+              <Typography>
+                <strong>Invoice Total:</strong> {formatMoney(client.invoiceTotal)}
+              </Typography>
+              <Typography>
+                <strong>Initial Payment Amount:</strong>{" "}
+                {formatMoney(client.initialPaymentAmount)}
+              </Typography>
+              <Typography>
+                <strong>Initial Payment Date:</strong>{" "}
+                {formatDate(client.initialPaymentDate)}
+              </Typography>
+              <Typography>
+                <strong>Installments Start On:</strong>{" "}
+                {formatDate(client.firstInstallmentDate)}
+              </Typography>
+              <Typography>
+                <strong>Last Edited By:</strong>{" "}
+                {client.invoiceUpdatedBy || "Unknown"}
+              </Typography>
+              <Typography>
+                <strong>Last Updated At:</strong>{" "}
+                {formatDate(client.invoiceUpdatedAt)}
+              </Typography>
+            </Box>
+          )}
+
+          <Box display="flex" gap={2}>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={() => setDrawerOpen(true)}
             >
-              ✏️ Edit Invoice
-            </button>
-            <button
-              onClick={handleDeleteInvoice}
-              style={{ backgroundColor: '#dc3545', color: '#fff', padding: '8px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-            >
-              🗑️ Delete Invoice
-            </button>
-          </div>
-        </>
+              ✏️ {client.invoiceTotal ? "Edit Invoice" : "Add Invoice"}
+            </Button>
+            {client.invoiceTotal && (
+              <Button
+                variant="outlined"
+                color="error"
+                onClick={handleDeleteInvoice}
+              >
+                🗑️ Delete Invoice
+              </Button>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
+
+      {/* Modal */}
+      {drawerOpen && (
+        <Box
+          position="fixed"
+          top={0}
+          left={0}
+          width="100%"
+          height="100%"
+          display="flex"
+          justifyContent="center"
+          alignItems="center"
+          bgcolor="rgba(0, 0, 0, 0.5)"
+          zIndex={1300}
+          onClick={() => setDrawerOpen(false)}
+        >
+          <Box
+            onClick={(e) => e.stopPropagation()}
+            bgcolor="white"
+            borderRadius={2}
+            p={4}
+            width="100%"
+            maxWidth="420px"
+            boxShadow={6}
+          >
+            <Typography variant="h6" mb={2}>
+              📝 {client.invoiceTotal ? "Edit Invoice" : "New Invoice"}
+            </Typography>
+
+            {error && (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {error}
+              </Alert>
+            )}
+
+            <TextField
+              fullWidth
+              type="number"
+              label="Invoice Total"
+              value={invoiceInput}
+              onChange={(e) => setInvoiceInput(e.target.value)}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              type="number"
+              label="Initial Payment"
+              value={initialPaymentInput}
+              onChange={(e) => setInitialPaymentInput(e.target.value)}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              type="date"
+              label="Initial Payment Date"
+              value={initialPaymentDate}
+              onChange={(e) => setInitialPaymentDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              type="date"
+              label="First Installment Date"
+              value={firstInstallmentDate}
+              onChange={(e) => setFirstInstallmentDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ mb: 2 }}
+            />
+
+            <Box display="flex" gap={1} mt={1}>
+              <Button
+                variant="outlined"
+                color="inherit"
+                onClick={() => setDrawerOpen(false)}
+                fullWidth
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                color="success"
+                fullWidth
+                onClick={handleSaveInvoiceAndInitialPayment}
+              >
+                Save
+              </Button>
+            </Box>
+          </Box>
+        </Box>
       )}
-    </div>
+
+      <Snackbar
+        open={success}
+        autoHideDuration={3000}
+        onClose={() => setSuccess(false)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        TransitionComponent={(props) => <Slide {...props} direction="up" />}
+      >
+        <Alert
+          onClose={() => setSuccess(false)}
+          severity="success"
+          sx={{ width: "100%" }}
+        >
+          ✅ Changes saved successfully!
+        </Alert>
+      </Snackbar>
+    </motion.div>
   );
 }

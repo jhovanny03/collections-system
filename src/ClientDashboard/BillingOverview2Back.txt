@@ -1,0 +1,330 @@
+// BillingOverview.js
+import React from "react";
+import {
+  Card,
+  CardContent,
+  Grid,
+  Typography,
+  Box,
+  LinearProgress,
+} from "@mui/material";
+import { motion } from "framer-motion";
+import PersonIcon from "@mui/icons-material/Person";
+import BalanceIcon from "@mui/icons-material/Gavel";
+import StatusIcon from "@mui/icons-material/Info";
+import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
+import PaidIcon from "@mui/icons-material/Paid";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
+
+export default function BillingOverview({ client }) {
+  const invoiceTotal = parseFloat(client?.invoiceTotal || 0);
+  const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
+  const allPayments = client?.payments || [];
+
+  const rawStart = client.firstInstallmentDate;
+  if (!rawStart)
+    return <Typography>Missing first installment date.</Typography>;
+
+  const firstInstallmentDate = rawStart?.seconds
+    ? new Date(rawStart.seconds * 1000)
+    : new Date(rawStart);
+
+  // All due dates are the 15th
+  const firstDueDate = new Date(firstInstallmentDate);
+  firstDueDate.setDate(15);
+
+  const today = new Date();
+
+  // ---------- Helpers ----------
+  const money = (n) =>
+    `$${Number(n || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+    })}`;
+
+  const labelFor = (d) =>
+    `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
+
+  // Sort schedule by start date
+  const schedule = (client.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  // ✅ Respect start & end ranges; fallback to $500 if no range found
+  const getInstallmentAmountForDate = (date) => {
+    for (let i = 0; i < schedule.length; i++) {
+      const s = schedule[i];
+      const sStart = new Date(s.start);
+      const sEnd = new Date(s.end);
+      if (date >= sStart && date <= sEnd) return Number(s.amount);
+    }
+    return 500;
+  };
+
+  // Only payments AFTER the initial payment date count toward installments
+  const paymentsAfterInitial = allPayments.filter(
+    (p) => new Date(p.date) > new Date(client.initialPaymentDate)
+  );
+
+  // Clone for mutation while allocating to months
+  const paymentPool = paymentsAfterInitial.map((p) => ({
+    amount: Number(p.amount),
+    date: p.date,
+  }));
+
+  // ---------- Build month list from first due date up to "today" ----------
+  const monthsUpToToday = [];
+  const cursor = new Date(firstDueDate);
+  while (cursor <= today) {
+    monthsUpToToday.push(new Date(cursor));
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  // ---------- Allocate payments oldest-first to past months ----------
+  let validTotalPaid = 0;
+  const dueMonths = []; // { label, amount }
+
+  for (const monthDate of monthsUpToToday) {
+    const amountDue = getInstallmentAmountForDate(monthDate);
+    let monthPaid = 0;
+
+    for (const p of paymentPool) {
+      if (p.amount <= 0) continue;
+      if (monthPaid >= amountDue) break;
+
+      const used = Math.min(amountDue - monthPaid, p.amount);
+      monthPaid += used;
+      validTotalPaid += used;
+      p.amount -= used;
+    }
+
+    if (monthPaid < amountDue) {
+      // Mark this month as missed with its exact amount
+      dueMonths.push({ label: labelFor(monthDate), amount: amountDue });
+    }
+  }
+
+  // ---------- APPLY EXTRA PAYMENTS TO FUTURE MONTHS WHEN CLIENT IS CURRENT ----------
+  // If there is leftover (client is current and paid extra), consume it against future months
+  let leftover = paymentPool.reduce((s, p) => s + (p.amount || 0), 0);
+  if (leftover > 0) {
+    // Start with the next logical due month (15th). Missed months were handled above.
+    const futureAllocCursor = new Date(today);
+    futureAllocCursor.setDate(15);
+    if (futureAllocCursor <= today) {
+      futureAllocCursor.setMonth(futureAllocCursor.getMonth() + 1);
+    }
+
+    let guard = 0; // safety
+    while (leftover > 0 && guard < 60) {
+      const amt = getInstallmentAmountForDate(futureAllocCursor);
+      const use = Math.min(amt, leftover);
+      validTotalPaid += use;
+      leftover -= use;
+
+      // advance a month
+      futureAllocCursor.setMonth(futureAllocCursor.getMonth() + 1);
+      guard++;
+    }
+  }
+
+  // ---------- Totals ----------
+  const amountDue = dueMonths.reduce((sum, m) => sum + m.amount, 0);
+  const remainingBalance = Math.max(
+    0,
+    invoiceTotal - initialPayment - validTotalPaid
+  );
+
+  // ---------- Find the first truly unpaid month (respects extra prepayments) ----------
+  // Use a fresh simulation pool so we don't disturb the allocated totals above
+  const simPool = paymentsAfterInitial.map((p) => ({
+    amount: Number(p.amount),
+    date: p.date,
+  }));
+
+  const monthIsFullyPaid = (d, pool) => {
+    const due = getInstallmentAmountForDate(d);
+    let paid = 0;
+    for (const p of pool) {
+      if (p.amount <= 0) continue;
+      const take = Math.min(due - paid, p.amount);
+      paid += take;
+      p.amount -= take;
+      if (paid >= due) break;
+    }
+    return paid >= due;
+  };
+
+  const firstUnpaid = new Date(firstDueDate);
+  let guardSim = 0;
+  while (guardSim < 120 && monthIsFullyPaid(firstUnpaid, simPool)) {
+    firstUnpaid.setMonth(firstUnpaid.getMonth() + 1);
+    guardSim++;
+  }
+
+  // ---------- Project months to fully cover remaining balance ----------
+  // Start projection from the first truly unpaid month
+  let futureStartDate = new Date(firstUnpaid);
+
+  const futureMonths = [];
+  let futureAccum = 0;
+  const cutoff = new Date(futureStartDate);
+  cutoff.setFullYear(cutoff.getFullYear() + 3); // hard safety limit
+
+  while (
+    futureStartDate <= cutoff &&
+    futureAccum < remainingBalance &&
+    futureMonths.length < 48
+  ) {
+    const amt = getInstallmentAmountForDate(futureStartDate);
+    futureMonths.push({ label: labelFor(futureStartDate), amount: amt });
+    futureAccum += amt;
+    futureStartDate.setMonth(futureStartDate.getMonth() + 1);
+  }
+
+  // ---------- UI helpers ----------
+  const getLastPaymentDisplay = () => {
+    if (!allPayments.length) return "N/A";
+    const latest = allPayments.reduce((latest, p) =>
+      new Date(p.date) > new Date(latest.date) ? p : latest
+    );
+    const dateStr = new Date(latest.date).toLocaleDateString("default", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    return `${dateStr} – $${Number(latest.amount).toLocaleString()}`;
+  };
+
+  const rows = [
+    {
+      label: "Name",
+      value: `${client.firstName} ${client.lastName}`,
+      icon: <PersonIcon />,
+    },
+    { label: "Case Type", value: client.caseType, icon: <BalanceIcon /> },
+    { label: "Case Status", value: client.caseStatus, icon: <StatusIcon /> },
+    {
+      label: "Invoice Total",
+      value: money(invoiceTotal),
+      icon: <AttachMoneyIcon />,
+    },
+    {
+      label: "Initial Payment",
+      value: money(initialPayment),
+      icon: <PaidIcon />,
+    },
+    {
+      label: "Total Paid (After Installment)",
+      value: money(validTotalPaid),
+      icon: <PaidIcon />,
+    },
+    {
+      label: "Remaining Balance",
+      value: money(remainingBalance),
+      icon: <AttachMoneyIcon />,
+    },
+    {
+      label: "Payments Left",
+      value: futureMonths.length,
+      icon: <CalendarMonthIcon />,
+    },
+    { label: "Amount Due", value: money(amountDue), icon: <AttachMoneyIcon /> },
+    {
+      label: "Months Past Due",
+      value: dueMonths.length || "None",
+      icon: <CalendarMonthIcon />,
+    },
+    {
+      label: "Missed Months",
+      value: dueMonths.length
+        ? `${dueMonths[0].label} – ${dueMonths[dueMonths.length - 1].label}`
+        : "None",
+      icon: <CalendarMonthIcon />,
+    },
+    {
+      label: "Expected Due Months",
+      value: futureMonths.map((m) => m.label).join(", "),
+      icon: <CalendarMonthIcon />,
+    },
+    {
+      label: "Last Payment",
+      value: getLastPaymentDisplay(),
+      icon: <AccessTimeIcon />,
+    },
+  ];
+
+  // Avoid NaN progress
+  const progress =
+    invoiceTotal > 0
+      ? ((initialPayment + validTotalPaid) / invoiceTotal) * 100
+      : 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+    >
+      <Card elevation={3} sx={{ borderRadius: 3, mb: 4 }}>
+        <CardContent>
+          <Typography variant="h6" fontWeight="bold" gutterBottom>
+            Billing Overview
+          </Typography>
+
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Payment Progress
+            </Typography>
+            <Box display="flex" alignItems="center" gap={2}>
+              <Box sx={{ flexGrow: 1 }}>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.max(0, Math.min(100, progress))}
+                  sx={{ height: 10, borderRadius: 5 }}
+                />
+              </Box>
+              <Typography variant="body2" fontWeight="bold">
+                {Math.round(Math.max(0, Math.min(100, progress)))}%
+              </Typography>
+            </Box>
+          </Box>
+
+          <Grid container spacing={2}>
+            {rows.map((row, index) => (
+              <Grid item xs={12} sm={6} key={index}>
+                <Box
+                  display="flex"
+                  alignItems="flex-start"
+                  gap={1.5}
+                  p={1}
+                  borderRadius={2}
+                  sx={{
+                    transition: "0.2s",
+                    "&:hover": {
+                      backgroundColor: "#f9f9f9",
+                      transform: "translateY(-2px)",
+                      boxShadow: 2,
+                    },
+                  }}
+                >
+                  <Box color="primary.main" mt={0.5}>
+                    {row.icon}
+                  </Box>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary">
+                      {row.label}
+                    </Typography>
+                    <Typography variant="body1" fontWeight="500">
+                      {row.value}
+                    </Typography>
+                  </Box>
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}

@@ -1,0 +1,32 @@
+// src/Reports/components/CollectionsPeriodChart.js
+import React from "react";
+import { Card, CardContent, CardHeader } from "@mui/material";
+import {
+  ResponsiveContainer, ComposedChart, XAxis, YAxis, Tooltip, Legend, Bar, Line
+} from "recharts";
+
+export default function CollectionsPeriodChart({ byPeriod }) {
+  const data = (byPeriod || []).map((r) => ({
+    label: r.label,
+    Expected: r.expected,
+    Actual: r.actual,
+  }));
+
+  return (
+    <Card sx={{ borderRadius: 3 }}>
+      <CardHeader title="Expected vs Actual (by period)" />
+      <CardContent sx={{ height: 320 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data}>
+            <XAxis dataKey="label" />
+            <YAxis />
+            <Tooltip formatter={(v) => `$${Number(v || 0).toLocaleString()}`} />
+            <Legend />
+            <Bar dataKey="Expected" />
+            <Line type="monotone" dataKey="Actual" />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}

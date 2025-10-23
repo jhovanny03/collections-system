@@ -1,0 +1,33 @@
+// src/Reports/components/CollectionsSummary.js
+import React from "react";
+import { Grid, Card, CardContent, Typography } from "@mui/material";
+
+const money = (n) => `$${Number(n || 0).toLocaleString()}`;
+
+export default function CollectionsSummary({ totals }) {
+  const items = [
+    { label: "Expected (Range)", value: money(totals?.expected) },
+    { label: "Actual Collected", value: money(totals?.actual) },
+    { label: "Variance", value: money(totals?.variance) },
+    { label: "Collection Rate", value: `${totals?.ratePct ?? 0}%` },
+  ];
+
+  return (
+    <Grid container spacing={2}>
+      {items.map((it) => (
+        <Grid item xs={12} sm={6} md={3} key={it.label}>
+          <Card sx={{ borderRadius: 2 }}>
+            <CardContent>
+              <Typography variant="body2" color="text.secondary">
+                {it.label}
+              </Typography>
+              <Typography variant="h6" fontWeight={700}>
+                {it.value}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      ))}
+    </Grid>
+  );
+}

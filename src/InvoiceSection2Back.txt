@@ -1,0 +1,332 @@
+// InvoiceSection.js
+import React, { useState } from "react";
+import { doc, updateDoc, arrayUnion } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
+import db from "./firebase";
+import {
+  Button,
+  TextField,
+  Typography,
+  Box,
+  Snackbar,
+  Alert,
+  Slide,
+} from "@mui/material";
+import { motion } from "framer-motion";
+
+export default function InvoiceSection({ client, setClient }) {
+  const [invoiceInput, setInvoiceInput] = useState("");
+  const [initialPaymentInput, setInitialPaymentInput] = useState("");
+  const [initialPaymentDate, setInitialPaymentDate] = useState("");
+  const [firstInstallmentDate, setFirstInstallmentDate] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // ---- Date helpers ----
+  const parseLocalYMD = (s) => {
+    // Parse "YYYY-MM-DD" as a *local* date to avoid UTC shifting (15 -> 14, etc.)
+    const [y, m, d] = s.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+
+  const parseDateFlexible = (value) => {
+    if (!value) return null;
+
+    // Firestore Timestamp-like
+    if (typeof value === "object" && value.seconds) {
+      return new Date(value.seconds * 1000);
+    }
+
+    // Pure Y-M-D from <input type="date">
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return parseLocalYMD(value);
+    }
+
+    // ISO or other date-like strings
+    return new Date(value);
+  };
+
+  const formatDate = (value) => {
+    const date = parseDateFlexible(value);
+    if (!date || isNaN(date)) return "N/A";
+    return date.toLocaleDateString("default", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  };
+
+  const formatMoney = (amount) =>
+    `$${Number(amount || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+    })}`;
+
+  const handleSaveInvoiceAndInitialPayment = async () => {
+    const invoice = parseFloat(invoiceInput);
+    const initial = parseFloat(initialPaymentInput);
+
+    if (
+      !invoiceInput ||
+      !initialPaymentInput ||
+      !initialPaymentDate ||
+      !firstInstallmentDate ||
+      isNaN(invoice) ||
+      isNaN(initial) ||
+      invoice <= 0 ||
+      initial <= 0
+    ) {
+      setError(
+        "Please fill in all fields and ensure values are greater than zero."
+      );
+      return;
+    }
+
+    // avoid duplicate initial-payment entry by date
+    const paymentExists = (client.payments || []).some(
+      (p) => p.date === initialPaymentDate
+    );
+    if (paymentExists) {
+      setError("A payment already exists for the selected date.");
+      return;
+    }
+
+    const auth = getAuth();
+    const user = auth.currentUser;
+    const username = user?.displayName || user?.email || "Anonymous";
+
+    const clientRef = doc(db, "clients", client.id);
+
+    // We store the raw YYYY-MM-DD strings; formatting happens on read.
+    const newPayment = {
+      amount: initial,
+      date: initialPaymentDate,
+      recordedAt: new Date().toISOString(),
+    };
+
+    await updateDoc(clientRef, {
+      invoiceTotal: invoice,
+      initialPaymentAmount: initial,
+      initialPaymentDate,
+      firstInstallmentDate,
+      payments: arrayUnion(newPayment),
+      invoiceUpdatedBy: username,
+      invoiceUpdatedAt: new Date().toISOString(),
+    });
+
+    setClient((prev) => ({
+      ...prev,
+      invoiceTotal: invoice,
+      initialPaymentAmount: initial,
+      initialPaymentDate,
+      firstInstallmentDate,
+      invoiceUpdatedBy: username,
+      invoiceUpdatedAt: new Date().toISOString(),
+      payments: [...(prev.payments || []), newPayment],
+    }));
+
+    setInvoiceInput("");
+    setInitialPaymentInput("");
+    setInitialPaymentDate("");
+    setFirstInstallmentDate("");
+    setDrawerOpen(false);
+    setError("");
+    setSuccess(true);
+  };
+
+  const handleDeleteInvoice = async () => {
+    const confirmDelete = window.confirm(
+      "Are you sure you want to delete this invoice and initial payment info?"
+    );
+    if (!confirmDelete) return;
+
+    const clientRef = doc(db, "clients", client.id);
+    await updateDoc(clientRef, {
+      invoiceTotal: null,
+      initialPaymentAmount: null,
+      initialPaymentDate: null,
+      firstInstallmentDate: null,
+      invoiceUpdatedBy: null,
+      invoiceUpdatedAt: null,
+    });
+
+    setClient((prev) => ({
+      ...prev,
+      invoiceTotal: null,
+      initialPaymentAmount: null,
+      initialPaymentDate: null,
+      firstInstallmentDate: null,
+      invoiceUpdatedBy: null,
+      invoiceUpdatedAt: null,
+    }));
+
+    setDrawerOpen(false);
+    setSuccess(true);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      style={{ marginBottom: "2rem" }}
+    >
+      <Typography variant="h6" fontWeight="bold" gutterBottom>
+        📋 Setup Invoice and Initial Payment
+      </Typography>
+
+      {!client.invoiceTotal ? (
+        <Typography color="text.secondary" mb={2}>
+          No invoice information saved.
+        </Typography>
+      ) : (
+        <Box
+          sx={{
+            backgroundColor: "#f8f9fa",
+            p: 2,
+            borderRadius: 2,
+            mb: 2,
+          }}
+        >
+          <Typography>
+            <strong>Invoice Total:</strong> {formatMoney(client.invoiceTotal)}
+          </Typography>
+          <Typography>
+            <strong>Initial Payment Amount:</strong>{" "}
+            {formatMoney(client.initialPaymentAmount)}
+          </Typography>
+          <Typography>
+            <strong>Initial Payment Date:</strong>{" "}
+            {formatDate(client.initialPaymentDate)}
+          </Typography>
+          <Typography>
+            <strong>Installments Start On:</strong>{" "}
+            {formatDate(client.firstInstallmentDate)}
+          </Typography>
+          <Typography>
+            <strong>Last Edited By:</strong>{" "}
+            {client.invoiceUpdatedBy || "Unknown"}
+          </Typography>
+          <Typography>
+            <strong>Last Updated At:</strong>{" "}
+            {formatDate(client.invoiceUpdatedAt)}
+          </Typography>
+        </Box>
+      )}
+
+      <Box display="flex" gap={2}>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={() => setDrawerOpen(true)}
+        >
+          ✏️ {client.invoiceTotal ? "Edit Invoice" : "Add Invoice"}
+        </Button>
+        {client.invoiceTotal && (
+          <Button
+            variant="outlined"
+            color="error"
+            onClick={handleDeleteInvoice}
+          >
+            🗑️ Delete Invoice
+          </Button>
+        )}
+      </Box>
+
+      {drawerOpen && (
+        <Box
+          position="fixed"
+          top={0}
+          left={0}
+          width="100%"
+          height="100%"
+          display="flex"
+          justifyContent="center"
+          alignItems="center"
+          bgcolor="rgba(0, 0, 0, 0.5)"
+          zIndex={1300}
+          onClick={() => setDrawerOpen(false)}
+        >
+          <Box
+            onClick={(e) => e.stopPropagation()}
+            bgcolor="white"
+            borderRadius={2}
+            p={4}
+            width="100%"
+            maxWidth="400px"
+            boxShadow={6}
+          >
+            <Typography variant="h6" mb={2}>
+              📝 {client.invoiceTotal ? "Edit Invoice" : "New Invoice"}
+            </Typography>
+
+            {error && (
+              <Alert severity="error" sx={{ mb: 2 }}>
+                {error}
+              </Alert>
+            )}
+
+            <TextField
+              fullWidth
+              type="number"
+              label="Invoice Total"
+              value={invoiceInput}
+              onChange={(e) => setInvoiceInput(e.target.value)}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              type="number"
+              label="Initial Payment"
+              value={initialPaymentInput}
+              onChange={(e) => setInitialPaymentInput(e.target.value)}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              type="date"
+              label="Initial Payment Date"
+              value={initialPaymentDate}
+              onChange={(e) => setInitialPaymentDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ mb: 2 }}
+            />
+            <TextField
+              fullWidth
+              type="date"
+              label="First Installment Date"
+              value={firstInstallmentDate}
+              onChange={(e) => setFirstInstallmentDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+              sx={{ mb: 2 }}
+            />
+            <Button
+              variant="contained"
+              color="success"
+              fullWidth
+              onClick={handleSaveInvoiceAndInitialPayment}
+            >
+              Save Invoice & Payment
+            </Button>
+          </Box>
+        </Box>
+      )}
+
+      <Snackbar
+        open={success}
+        autoHideDuration={3000}
+        onClose={() => setSuccess(false)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        TransitionComponent={(props) => <Slide {...props} direction="up" />}
+      >
+        <Alert
+          onClose={() => setSuccess(false)}
+          severity="success"
+          sx={{ width: "100%" }}
+        >
+          ✅ Changes saved successfully!
+        </Alert>
+      </Snackbar>
+    </motion.div>
+  );
+}
