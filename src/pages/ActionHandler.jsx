@@ -8,6 +8,7 @@ import {
   TextField,
   Alert,
   CircularProgress,
+  Stack,
 } from "@mui/material";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
@@ -16,10 +17,15 @@ import {
   checkActionCode,
   confirmPasswordReset,
 } from "firebase/auth";
+import verticalLogo from "../assets/Vertical Logo ENG.png"; // ✅ your logo
 
 const GENERATE_RESET_ENDPOINT =
   "https://us-central1-collectionsapp-7d351.cloudfunctions.net/generateResetLinkHttp";
 const MIN_LEN = 6;
+
+// 🎨 Brand colors
+const FEDERAL_BLUE = "#0b3a75";
+const PERSIAN_GREEN = "#00a693";
 
 export default function ActionHandler() {
   const [sp] = useSearchParams();
@@ -46,7 +52,6 @@ export default function ActionHandler() {
 
   useEffect(() => {
     let cancelled = false;
-
     async function run() {
       setError("");
       setInfo("");
@@ -127,8 +132,6 @@ export default function ActionHandler() {
       await confirmPasswordReset(auth, oobCode, newPassword);
       setResetDone(true);
       setInfo("Password reset complete. Redirecting to login…");
-
-      // ✅ Redirect to login after 3 seconds
       setTimeout(() => navigate("/login"), 3000);
     } catch (e) {
       setError(e?.message || "Failed to reset password.");
@@ -141,16 +144,48 @@ export default function ActionHandler() {
     <Box
       sx={{
         minHeight: "100vh",
-        backgroundColor: "#f6f7fb",
+        backgroundImage: "linear-gradient(135deg, #0b3a75 0%, #00a693 100%)", // ✅ gradient only
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         p: 2,
       }}
     >
-      <Card sx={{ maxWidth: 520, width: "100%", borderRadius: 3 }}>
+      <Card
+        sx={{
+          maxWidth: 540,
+          width: "100%",
+          borderRadius: 3,
+          background: "#fff",
+          boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+        }}
+      >
         <CardContent sx={{ p: 4 }}>
-          <Typography variant="h5" fontWeight={700} sx={{ mb: 1 }}>
+          {/* ✅ Brand header with vertical logo */}
+          <Stack alignItems="center" spacing={1.5} sx={{ mb: 2 }}>
+            <Box
+              component="img"
+              src={verticalLogo}
+              alt="Rahman Law"
+              sx={{
+                height: 80,
+                width: "auto",
+                objectFit: "contain",
+                filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.15))",
+              }}
+            />
+          </Stack>
+
+          <Typography
+            variant="h5"
+            fontWeight={800}
+            sx={{
+              mb: 1,
+              color: FEDERAL_BLUE,
+              letterSpacing: 0.2,
+              textAlign: "center",
+            }}
+          >
             {mode === "verifyEmail" && "Verify your email"}
             {mode === "resetPassword" && "Reset your password"}
           </Typography>
@@ -183,9 +218,10 @@ export default function ActionHandler() {
                 disabled={!resetLink}
                 sx={{
                   textTransform: "none",
-                  fontWeight: 600,
-                  background: "#0B5CAD",
-                  "&:hover": { background: "#094b8b" },
+                  fontWeight: 700,
+                  px: 3,
+                  bgcolor: PERSIAN_GREEN,
+                  "&:hover": { bgcolor: "#00877c" },
                 }}
               >
                 Set Password
@@ -211,9 +247,7 @@ export default function ActionHandler() {
                 onChange={(e) => setNewPassword(e.target.value)}
                 fullWidth
                 error={tooShort}
-                helperText={
-                  tooShort ? `Must be at least ${MIN_LEN} characters.` : " "
-                }
+                helperText={tooShort ? `Must be at least ${MIN_LEN} characters.` : " "}
               />
               <TextField
                 type="password"
@@ -231,9 +265,10 @@ export default function ActionHandler() {
                 disabled={!canSubmit}
                 sx={{
                   textTransform: "none",
-                  fontWeight: 600,
-                  background: "#0B5CAD",
-                  "&:hover": { background: "#094b8b" },
+                  fontWeight: 700,
+                  px: 3,
+                  bgcolor: PERSIAN_GREEN,
+                  "&:hover": { bgcolor: "#00877c" },
                 }}
               >
                 {resetDone ? "Password Updated" : "Update Password"}

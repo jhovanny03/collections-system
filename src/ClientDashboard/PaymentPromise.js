@@ -1,8 +1,37 @@
 // src/ClientDashboard/PaymentPromise.js
-import React, { useState } from 'react';
-import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
-import db from '../firebase';
+import React, { useState } from "react";
+import { doc, updateDoc, arrayUnion } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
+import db from "../firebase";
+
+import {
+  Box,
+  Card,
+  CardContent,
+  CardHeader,
+  Typography,
+  Stack,
+  TextField,
+  Button,
+  Chip,
+  Divider,
+  Alert,
+  Tooltip,
+} from "@mui/material";
+import EventIcon from "@mui/icons-material/Event";
+import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
+import NoteAltIcon from "@mui/icons-material/NoteAlt";
+import EditIcon from "@mui/icons-material/Edit";
+import DeleteIcon from "@mui/icons-material/Delete";
+import SaveIcon from "@mui/icons-material/Save";
+import CancelIcon from "@mui/icons-material/Close";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import UpcomingIcon from "@mui/icons-material/Upcoming";
+
+/** Brand colors (same as the rest of the app) */
+const FEDERAL_BLUE = "#0b3a75";
+const PERSIAN_GREEN = "#00a693";
+const SYRACUSE_RED = "#d44500";
 
 /** ──────────────────────────────────────────────────────────────
  *  Named export used by Agenda/Week/Month Day calendar views
@@ -18,15 +47,18 @@ export async function savePaymentPromise(clientId, promiseDate, amount, notes) {
   const updatedPromise = {
     date: promiseDate,
     amount: parseFloat(amount),
-    notes: notes || ''
+    notes: notes || "",
   };
 
   const auth = getAuth();
   const user = auth.currentUser;
-  const who = user?.displayName || user?.email || 'Anonymous';
+  const who = user?.displayName || user?.email || "Anonymous";
 
-  const logMessage =
-    `Client promised to pay $${Number(updatedPromise.amount).toLocaleString()} on ${updatedPromise.date}. Notes: ${updatedPromise.notes || 'None'}`;
+  const logMessage = `Client promised to pay $${Number(
+    updatedPromise.amount
+  ).toLocaleString()} on ${updatedPromise.date}. Notes: ${
+    updatedPromise.notes || "None"
+  }`;
 
   const newLog = {
     message: logMessage,
@@ -34,7 +66,7 @@ export async function savePaymentPromise(clientId, promiseDate, amount, notes) {
     user: who,
   };
 
-  const clientRef = doc(db, 'clients', clientId);
+  const clientRef = doc(db, "clients", clientId);
   await updateDoc(clientRef, {
     paymentPromise: updatedPromise,
     communicationLogs: arrayUnion(newLog),
@@ -47,9 +79,9 @@ export async function savePaymentPromise(clientId, promiseDate, amount, notes) {
  *  Default UI component (refreshed styling, same logic)
  *  ──────────────────────────────────────────────────────────── */
 export default function PaymentPromise({ client, setClient }) {
-  const [promiseDate, setPromiseDate] = useState('');
-  const [promiseAmount, setPromiseAmount] = useState('');
-  const [promiseNotes, setPromiseNotes] = useState('');
+  const [promiseDate, setPromiseDate] = useState("");
+  const [promiseAmount, setPromiseAmount] = useState("");
+  const [promiseNotes, setPromiseNotes] = useState("");
   const [isEditing, setIsEditing] = useState(false);
 
   const onSave = async () => {
@@ -62,147 +94,301 @@ export default function PaymentPromise({ client, setClient }) {
         promiseNotes
       );
 
-      setClient(prev => ({
+      setClient((prev) => ({
         ...prev,
         paymentPromise: updatedPromise,
         communicationLogs: [...(prev.communicationLogs || []), newLog],
       }));
 
-      setPromiseDate('');
-      setPromiseAmount('');
-      setPromiseNotes('');
+      setPromiseDate("");
+      setPromiseAmount("");
+      setPromiseNotes("");
       setIsEditing(false);
     } catch (e) {
       console.error(e);
-      alert(e.message || 'Failed to save promise');
+      alert(e.message || "Failed to save promise");
     }
   };
 
   const onDelete = async () => {
     if (!client?.id) return;
     if (!window.confirm("Delete this payment promise?")) return;
-    const clientRef = doc(db, 'clients', client.id);
+    const clientRef = doc(db, "clients", client.id);
     await updateDoc(clientRef, { paymentPromise: null });
-    setClient(prev => ({ ...prev, paymentPromise: null }));
+    setClient((prev) => ({ ...prev, paymentPromise: null }));
   };
 
   const startEdit = () => {
     if (!client?.paymentPromise) return;
-    setPromiseDate(client.paymentPromise.date || '');
-    setPromiseAmount(client.paymentPromise.amount || '');
-    setPromiseNotes(client.paymentPromise.notes || '');
+    setPromiseDate(client.paymentPromise.date || "");
+    setPromiseAmount(client.paymentPromise.amount || "");
+    setPromiseNotes(client.paymentPromise.notes || "");
     setIsEditing(true);
   };
 
   const isMissed = (() => {
     const d = client?.paymentPromise?.date;
     if (!d) return false;
-    const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
     return new Date(d) < todayMidnight;
   })();
 
+  const isUpcoming =
+    client?.paymentPromise?.date &&
+    new Date(client.paymentPromise.date) >= new Date();
+
+  const currentPromise = client?.paymentPromise;
+
   return (
-    <div style={{ marginBottom: '2rem' }}>
-      <h3 style={{ marginBottom: '1rem' }}>📅 Payment Promise</h3>
+    <Box sx={{ mb: 3 }}>
+      {/* Header */}
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        sx={{ mb: 1.5 }}
+      >
+        <Typography
+          variant="h6"
+          sx={{ fontWeight: 700, color: FEDERAL_BLUE, letterSpacing: 0.2 }}
+        >
+          Payment Promise
+        </Typography>
 
-      {client?.paymentPromise && isMissed && (
-        <div style={alertBoxRed}>
-          🔴 Missed promise from <strong>{client.paymentPromise.date}</strong> – $
-          {Number(client.paymentPromise.amount).toLocaleString()}
-        </div>
+        {currentPromise && (
+          <Chip
+            size="small"
+            label={isMissed ? "Missed" : "Active"}
+            color={isMissed ? "error" : "success"}
+            variant={isMissed ? "filled" : "outlined"}
+          />
+        )}
+      </Stack>
+
+      {/* Missed promise alert */}
+      {currentPromise && isMissed && (
+        <Alert
+          severity="error"
+          icon={<WarningAmberIcon fontSize="small" />}
+          sx={{
+            mb: 2,
+            borderLeft: `4px solid ${SYRACUSE_RED}`,
+            boxShadow: "0 3px 10px rgba(0,0,0,0.06)",
+          }}
+        >
+          Missed promise from{" "}
+          <strong>{currentPromise.date}</strong> – $
+          {Number(currentPromise.amount).toLocaleString()}
+        </Alert>
       )}
 
-      {client?.paymentPromise && (
-        <div style={cardGreen}>
-          <p><strong>Promised on:</strong> {client.paymentPromise.date}</p>
-          <p><strong>Amount:</strong> ${Number(client.paymentPromise.amount).toLocaleString()}</p>
-          <p><strong>Notes:</strong> {client.paymentPromise.notes || 'None'}</p>
-          <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-            <button onClick={startEdit} style={btnBlue}>✏️ Edit</button>
-            <button onClick={onDelete} style={btnRed}>🗑️ Delete</button>
-          </div>
-        </div>
+      {/* Current promise card */}
+      {currentPromise && (
+        <Card
+          variant="outlined"
+          sx={{
+            mb: 2,
+            borderRadius: 2,
+            borderLeft: `4px solid ${
+              isMissed ? SYRACUSE_RED : PERSIAN_GREEN
+            }`,
+            backgroundColor: isMissed ? "#fff5f5" : "#f3fcf8",
+          }}
+        >
+          <CardHeader
+            title={
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="subtitle1" fontWeight={700}>
+                  Current Promise
+                </Typography>
+                {!isMissed && (
+                  <Chip
+                    size="small"
+                    label="On file"
+                    color="success"
+                    variant="outlined"
+                  />
+                )}
+              </Stack>
+            }
+            sx={{ pb: 0.5 }}
+          />
+          <CardContent sx={{ pt: 1.5 }}>
+            <Stack spacing={1.5}>
+              <Stack direction="row" spacing={1.5} flexWrap="wrap">
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <EventIcon fontSize="small" color="action" />
+                  <Typography variant="body2">
+                    <strong>Date:</strong> {currentPromise.date}
+                  </Typography>
+                </Stack>
+
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <AttachMoneyIcon fontSize="small" color="action" />
+                  <Typography variant="body2">
+                    <strong>Amount:</strong> $
+                    {Number(currentPromise.amount).toLocaleString()}
+                  </Typography>
+                </Stack>
+              </Stack>
+
+              <Stack direction="row" spacing={1.2} alignItems="flex-start">
+                <NoteAltIcon fontSize="small" color="action" />
+                <Typography variant="body2">
+                  <strong>Notes:</strong>{" "}
+                  {currentPromise.notes || "None"}
+                </Typography>
+              </Stack>
+
+              <Divider sx={{ my: 1 }} />
+
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Tooltip title="Edit this promise">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<EditIcon fontSize="small" />}
+                    onClick={startEdit}
+                    sx={{ textTransform: "none", fontWeight: 600 }}
+                  >
+                    Edit
+                  </Button>
+                </Tooltip>
+                <Tooltip title="Delete this promise">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    startIcon={<DeleteIcon fontSize="small" />}
+                    onClick={onDelete}
+                    sx={{ textTransform: "none", fontWeight: 600 }}
+                  >
+                    Delete
+                  </Button>
+                </Tooltip>
+              </Stack>
+            </Stack>
+          </CardContent>
+        </Card>
       )}
 
-      {/* Form */}
-      <div style={formBox}>
-        <label style={labelStyle}>Promise Date</label>
-        <input
-          type="date"
-          value={promiseDate}
-          onChange={(e) => setPromiseDate(e.target.value)}
-          style={inputStyle}
+      {/* Form card */}
+      <Card
+        variant="outlined"
+        sx={{
+          borderRadius: 2,
+          backgroundColor: "#ffffff",
+          boxShadow: "0 4px 18px rgba(15,22,33,0.04)",
+        }}
+      >
+        <CardHeader
+          title={
+            <Typography variant="subtitle1" fontWeight={700}>
+              {isEditing ? "Edit Payment Promise" : "Create Payment Promise"}
+            </Typography>
+          }
+          subheader={
+            <Typography variant="body2" color="text.secondary">
+              Track when a client has promised to pay and how much.
+            </Typography>
+          }
+          sx={{ pb: 0 }}
         />
+        <CardContent sx={{ pt: 2 }}>
+          <Stack spacing={2}>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={2}
+            >
+              <TextField
+                label="Promise Date"
+                type="date"
+                value={promiseDate}
+                onChange={(e) => setPromiseDate(e.target.value)}
+                fullWidth
+                InputLabelProps={{ shrink: true }}
+                size="small"
+              />
+              <TextField
+                label="Amount"
+                type="number"
+                value={promiseAmount}
+                onChange={(e) => setPromiseAmount(e.target.value)}
+                fullWidth
+                size="small"
+              />
+            </Stack>
 
-        <label style={labelStyle}>Amount</label>
-        <input
-          type="number"
-          value={promiseAmount}
-          onChange={(e) => setPromiseAmount(e.target.value)}
-          style={inputStyle}
-        />
+            <TextField
+              label="Notes"
+              multiline
+              minRows={3}
+              value={promiseNotes}
+              onChange={(e) => setPromiseNotes(e.target.value)}
+              fullWidth
+              size="small"
+            />
 
-        <label style={labelStyle}>Notes</label>
-        <textarea
-          value={promiseNotes}
-          onChange={(e) => setPromiseNotes(e.target.value)}
-          rows={3}
-          style={inputStyle}
-        />
+            <Stack
+              direction="row"
+              spacing={1}
+              justifyContent="flex-end"
+              sx={{ pt: 1 }}
+            >
+              {isEditing && (
+                <Button
+                  variant="text"
+                  startIcon={<CancelIcon fontSize="small" />}
+                  onClick={() => {
+                    setIsEditing(false);
+                    setPromiseDate("");
+                    setPromiseAmount("");
+                    setPromiseNotes("");
+                  }}
+                  sx={{ textTransform: "none" }}
+                >
+                  Cancel
+                </Button>
+              )}
+              <Button
+                variant="contained"
+                startIcon={<SaveIcon fontSize="small" />}
+                onClick={onSave}
+                sx={{
+                  textTransform: "none",
+                  fontWeight: 700,
+                  bgcolor: PERSIAN_GREEN,
+                  "&:hover": { bgcolor: "#00877c" },
+                }}
+              >
+                {isEditing ? "Save Changes" : "Save Promise"}
+              </Button>
+            </Stack>
+          </Stack>
+        </CardContent>
+      </Card>
 
-        <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-          <button onClick={onSave} style={btnPrimary}>💾 Save Promise</button>
-          {isEditing && (
-            <button onClick={() => setIsEditing(false)} style={btnGray}>Cancel</button>
-          )}
-        </div>
-      </div>
-
-      {client?.paymentPromise && !isEditing && new Date(client.paymentPromise.date) > new Date() && (
-        <div style={{ marginTop: '1.5rem', padding: 10, borderRadius: 6, backgroundColor: '#f1f9ff', border: '1px solid #cce5ff' }}>
-          <h4>📆 Upcoming Promise</h4>
-          <p>
-            <strong>{new Date(client.paymentPromise.date).toLocaleDateString()}</strong> – $
-            {Number(client.paymentPromise.amount).toLocaleString()} – Still Pending
-          </p>
-        </div>
+      {/* Upcoming banner */}
+      {currentPromise && !isEditing && isUpcoming && !isMissed && (
+        <Alert
+          icon={<UpcomingIcon fontSize="small" />}
+          severity="info"
+          sx={{
+            mt: 2,
+            borderLeft: `4px solid ${FEDERAL_BLUE}`,
+            backgroundColor: "#f4f7ff",
+          }}
+        >
+          <Typography variant="body2">
+            <strong>
+              {new Date(currentPromise.date).toLocaleDateString()}
+            </strong>{" "}
+            – ${Number(currentPromise.amount).toLocaleString()} – still
+            pending.
+          </Typography>
+        </Alert>
       )}
-    </div>
+    </Box>
   );
 }
-
-/* ── styles (unchanged logic) ────────────────────────────────── */
-const cardGreen = {
-  backgroundColor: '#e9f7ef',
-  border: '1px solid #c3e6cb',
-  padding: 12,
-  borderRadius: 8,
-  marginBottom: '1rem'
-};
-const alertBoxRed = {
-  backgroundColor: '#f8d7da',
-  border: '1px solid #f5c6cb',
-  color: '#721c24',
-  padding: 12,
-  borderRadius: 8,
-  marginBottom: '1rem'
-};
-const formBox = {
-  backgroundColor: '#f9f9f9',
-  border: '1px solid #ddd',
-  padding: 12,
-  borderRadius: 8,
-};
-const inputStyle = {
-  display: 'block',
-  marginBottom: '0.8rem',
-  width: '100%',
-  padding: 8,
-  borderRadius: 4,
-  border: '1px solid #ccc'
-};
-const labelStyle = { fontWeight: 500, marginBottom: '0.2rem', display: 'block' };
-const btnPrimary = { padding: '8px 14px', backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' };
-const btnRed = { ...btnPrimary, backgroundColor: '#dc3545' };
-const btnBlue = { ...btnPrimary, backgroundColor: '#17a2b8' };
-const btnGray = { ...btnPrimary, backgroundColor: '#6c757d' };

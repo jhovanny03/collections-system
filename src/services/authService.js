@@ -29,25 +29,37 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
-  // NEW ↓↓↓
   sendPasswordResetEmail,
   updatePassword,
   reauthenticateWithCredential,
   EmailAuthProvider,
+  GoogleAuthProvider,
+  signInWithPopup,
 } from "firebase/auth";
 import { auth } from "../firebase";
 
+const COMPANY_DOMAIN = "rahmanlawpllc.com";
+
 export const authService = {
-  // (igual que tu original)
   register: (email, password) =>
     createUserWithEmailAndPassword(auth, email, password),
 
-  // (igual que tu original)
   login: (email, password) =>
     signInWithEmailAndPassword(auth, email, password),
 
-  // (igual que tu original)
   logout: () => signOut(auth),
+
+  async loginWithGoogle() {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ hd: COMPANY_DOMAIN });
+    const result = await signInWithPopup(auth, provider);
+    const email = (result.user.email || "").toLowerCase();
+    if (!email.endsWith(`@${COMPANY_DOMAIN}`)) {
+      await signOut(auth);
+      throw new Error("Only @rahmanlawpllc.com accounts are allowed.");
+    }
+    return result;
+  },
 
   // NEW: Enviar email de restablecimiento de contraseña
   // Uso: await authService.sendPasswordReset(email)

@@ -5,8 +5,10 @@ import { collection, getDocs } from "firebase/firestore";
 import db from "../firebase";
 
 import ARAgingReport from "./ARAgingReport";
-import CollectionsReport from "./CollectionsReport";   // ✅ NEW
+import CollectionsReport from "./CollectionsReport";
 import CohortReport from "./CohortReport";
+import PaymentHistoryReport from "./PaymentHistoryReport";
+import PaymentAllocationsReport from "./PaymentAllocationsReport";
 
 function TabPanel({ value, index, children }) {
   if (value !== index) return null;
@@ -19,7 +21,7 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  // Load clients once for Collections & Cohort
+  // Load clients once for Collections / Cohort / Payment Allocations
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -34,7 +36,9 @@ export default function ReportsPage() {
         if (mounted) setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   return (
@@ -42,7 +46,7 @@ export default function ReportsPage() {
       <Card sx={{ borderRadius: 1 }}>
         <CardHeader
           title="Collections Reports"
-          subheader="Analyze receivables, cash collections, and client cohorts"
+          subheader="Analyze receivables, cash collections, client cohorts, and payment allocations"
           sx={{
             "& .MuiCardHeader-title": { fontWeight: 700 },
             "& .MuiCardHeader-subheader": { color: "text.secondary" },
@@ -57,8 +61,10 @@ export default function ReportsPage() {
             allowScrollButtonsMobile
           >
             <Tab label="A/R Aging" />
-            <Tab label="Collections" />           {/* ✅ now live */}
+            <Tab label="Collections" />
             <Tab label="Cohort Analysis" />
+            <Tab label="Payment History" />
+            <Tab label="Payment Allocations" />
           </Tabs>
 
           {loading && (
@@ -66,6 +72,7 @@ export default function ReportsPage() {
               Loading report data…
             </Typography>
           )}
+
           {err && !loading && (
             <Typography sx={{ p: 2 }} color="error">
               {err}
@@ -79,11 +86,19 @@ export default function ReportsPage() {
               </TabPanel>
 
               <TabPanel value={tab} index={1}>
-                <CollectionsReport clients={clients} />   {/* ✅ full report */}
+                <CollectionsReport clients={clients} />
               </TabPanel>
 
               <TabPanel value={tab} index={2}>
                 <CohortReport clients={clients} loading={loading} />
+              </TabPanel>
+
+              <TabPanel value={tab} index={3}>
+                <PaymentHistoryReport />
+              </TabPanel>
+
+              <TabPanel value={tab} index={4}>
+                <PaymentAllocationsReport clients={clients} />
               </TabPanel>
             </>
           )}

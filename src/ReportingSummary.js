@@ -18,8 +18,11 @@ import {
   Typography,
 } from "@mui/material";
 
-/* ==================== Billing math (mirrors ClientList) ==================== */
-const toDate = (raw) => (raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw));
+/* ==================== Billing math (aligned with ClientList) ==================== */
+const DUE_DAY = 15;
+
+const toDate = (raw) =>
+  raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 
@@ -34,57 +37,82 @@ const getInstallmentAmountForDate = (schedule, date) => {
   return 500; // fallback
 };
 
-/**
- * Unified snapshot per client — same rules as ClientList:
- * - 15th rule (include current month only if today >= 15)
- * - DO NOT truncate months on pause for past-due (pause affects future projection only)
- * - skipMonths respected
- * - Anchor for past-due is ALWAYS firstInstallmentDate (NOT expectedAnchor)
- * - FIFO allocation of payments AFTER initialPaymentDate
- * - variable installmentSchedule amounts
- */
 function computeBillingSnapshot(client, now = new Date()) {
-  const status = client?.status || "active"; // "active" | "paused" | "closed"
+  const status = (client?.status || "active").toLowerCase();
   const isClosed = status === "closed";
+  const isPaused = status === "paused";
 
-  // 🔁 Anchor for past-due: ALWAYS original start (not expectedAnchor)
+  const invoiceBase = Number(client?.invoiceTotal || 0);
+  const adjustments = Array.isArray(client?.invoiceAdjustments)
+    ? client.invoiceAdjustments
+    : [];
+  const adjToBalanceTotal = adjustments.reduce((sum, a) => {
+    const applyTo = (a?.applyTo || "balance").toLowerCase();
+    const amt = Number(a?.amount || 0);
+    const dp = Number(a?.downPayment || 0);
+    return applyTo === "balance" ? sum + (amt - dp) : sum;
+  }, 0);
+  const invoiceEffective = Math.max(0, invoiceBase + adjToBalanceTotal);
+
+  const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
+  const collectibleCap = Math.max(0, invoiceEffective - initialPayment);
+
   if (!client.firstInstallmentDate) {
-    return { amountDue: 0, missedMonths: 0 };
+    const remainingBalance = Math.max(0, invoiceEffective - initialPayment);
+    const isPaidInFull = remainingBalance <= 0 || isClosed;
+    return { amountDue: 0, missedMonths: 0, isPaidInFull };
   }
+
   const planStart = toDate(client.firstInstallmentDate);
   if (!planStart || isNaN(planStart)) {
-    return { amountDue: 0, missedMonths: 0 };
+    const remainingBalance = Math.max(0, invoiceEffective - initialPayment);
+    const isPaidInFull = remainingBalance <= 0 || isClosed;
+    return { amountDue: 0, missedMonths: 0, isPaidInFull };
   }
 
-  // All due dates on the 15th of each month
-  const firstDueDate = new Date(planStart.getFullYear(), planStart.getMonth(), 15);
+  const firstDueDate = new Date(planStart.getFullYear(), planStart.getMonth(), DUE_DAY);
 
-  // ⛔️ Do NOT truncate on pause for past-due; use "now" so 15th rule applies naturally
-  const cutoff = now;
+  // ✅ Pause rule: if paused, stop at pause month:
+  // - paused BEFORE 15th => cutoff is 14th (so current month NOT included)
+  // - paused ON/AFTER 15th => cutoff is 15th (so current month IS included)
+  const pauseStartedAt = client?.pauseStartedAt ? toDate(client.pauseStartedAt) : null;
 
-  // Skip months
+  const cutoff =
+    isPaused && pauseStartedAt
+      ? new Date(
+          pauseStartedAt.getFullYear(),
+          pauseStartedAt.getMonth(),
+          pauseStartedAt.getDate() >= DUE_DAY ? DUE_DAY : DUE_DAY - 1
+        )
+      : now;
+
   const skipSet = new Set((client.skipMonths || []).map(String));
   const monthIsSkipped = (d) => skipSet.has(ymKey(d));
 
-  // Build (sorted) schedule
   const schedule = (client.installmentSchedule || [])
     .slice()
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
-  // Build list of billable due months up to cutoff
   const monthsUpToCutoff = [];
   if (!isClosed) {
     const cursor = new Date(firstDueDate);
-    // include current month only if today >= 15 (natural via date comparison)
+    let expectedAccum = 0;
     while (cursor <= cutoff) {
-      if (!monthIsSkipped(cursor)) monthsUpToCutoff.push(new Date(cursor));
+      if (!monthIsSkipped(cursor)) {
+        const amt = getInstallmentAmountForDate(schedule, cursor);
+        if (expectedAccum >= collectibleCap) break;
+        if (expectedAccum + amt > collectibleCap) break;
+        monthsUpToCutoff.push(new Date(cursor));
+        expectedAccum += amt;
+      }
       cursor.setMonth(cursor.getMonth() + 1);
     }
   }
 
-  // Payments AFTER initialPaymentDate (FIFO)
   const allPayments = client?.payments || [];
-  const initialPaymentDate = client?.initialPaymentDate ? new Date(client.initialPaymentDate) : null;
+  const initialPaymentDate = client?.initialPaymentDate
+    ? new Date(client.initialPaymentDate)
+    : null;
   const paymentsAfterInitial = initialPaymentDate
     ? allPayments.filter((p) => new Date(p.date) > initialPaymentDate)
     : allPayments.slice();
@@ -94,9 +122,8 @@ function computeBillingSnapshot(client, now = new Date()) {
     date: p.date,
   }));
 
-  // Allocate oldest-first across the past months
-  let totalDue = 0;
-  let missedMonths = 0;
+  let validTotalPaid = 0;
+  const dueMonths = [];
 
   for (const monthDate of monthsUpToCutoff) {
     const monthAmt = getInstallmentAmountForDate(schedule, monthDate);
@@ -108,20 +135,34 @@ function computeBillingSnapshot(client, now = new Date()) {
       const used = Math.min(monthAmt - monthPaid, p.amount);
       monthPaid += used;
       p.amount -= used;
+      validTotalPaid += used;
     }
 
     if (monthPaid < monthAmt) {
-      totalDue += monthAmt;
-      missedMonths += 1;
+      dueMonths.push({ amount: monthAmt });
     }
   }
 
-  if (isClosed) return { amountDue: 0, missedMonths: 0 };
-  return { amountDue: totalDue, missedMonths };
+  const leftover = pool.reduce((s, p) => s + (p.amount || 0), 0);
+  const capRoom = Math.max(0, collectibleCap - validTotalPaid);
+  if (leftover > 0 && capRoom > 0) {
+    validTotalPaid += Math.min(leftover, capRoom);
+  }
+
+  const remainingBalance = Math.max(0, invoiceEffective - initialPayment - validTotalPaid);
+  const isPaidInFull = remainingBalance <= 0 || isClosed;
+
+  if (isPaidInFull) return { amountDue: 0, missedMonths: 0, isPaidInFull: true };
+
+  const amountDue = dueMonths.reduce((sum, m) => sum + (Number(m.amount) || 0), 0);
+  const missedMonths = dueMonths.length;
+
+  if (isClosed) return { amountDue: 0, missedMonths: 0, isPaidInFull: true };
+  return { amountDue, missedMonths, isPaidInFull };
 }
 
 export default function ReportingSummary() {
-  const [clients, setClients] = useState(null); // null = loading; [] = loaded but empty
+  const [clients, setClients] = useState(null);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "clients"), (snap) => {
@@ -138,31 +179,33 @@ export default function ReportingSummary() {
     let highBalanceCount = 0;
     let arrangementCount = 0;
 
-    // Promise metrics
+    // On-hold subset of past-due
+    let holdPastDueCount = 0;
+
+    // Promises
     let totalPromisedThisMonth = 0;
     let clientsWithPromise = 0;
     let promisesMade = 0;
     let promisesFulfilled = 0;
 
-    // Aging buckets by number of missed months
     const aging = { "1mo": 0, "2mo": 0, "3mo": 0, "4plus": 0 };
-
-    // Denominator for aging %: clients we could compute a snapshot for
-    let agingDenominator = 0;
 
     const now = new Date();
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
 
     clients.forEach((client) => {
-      const { amountDue, missedMonths } = computeBillingSnapshot(client, now);
-      const snapshotValid = client.firstInstallmentDate; // anchor is original start
+      const { amountDue, missedMonths, isPaidInFull } = computeBillingSnapshot(client, now);
 
-      if (snapshotValid) agingDenominator++;
+      const isPastDue = missedMonths > 0 && !isPaidInFull;
 
-      if (missedMonths > 0) {
+      if (isPastDue) {
         pastDueCount++;
         totalAmountOwed += amountDue;
+
+        if (client?.paymentHold?.active === true) {
+          holdPastDueCount++;
+        }
 
         if (missedMonths === 1) aging["1mo"]++;
         else if (missedMonths === 2) aging["2mo"]++;
@@ -173,7 +216,6 @@ export default function ReportingSummary() {
       if (amountDue > 2000) highBalanceCount++;
       if (client.paymentArrangement) arrangementCount++;
 
-      // Promises (unchanged)
       const p = client.paymentPromise;
       if (p?.date) {
         const promiseDate = new Date(p.date);
@@ -205,12 +247,17 @@ export default function ReportingSummary() {
 
     const pct = (count, den) => (den > 0 ? Math.round((count / den) * 100) : 0);
 
+    // ✅ Percentages are now based on PAST DUE clients only
     const agingPct = {
-      "1mo": pct(aging["1mo"], agingDenominator),
-      "2mo": pct(aging["2mo"], agingDenominator),
-      "3mo": pct(aging["3mo"], agingDenominator),
-      "4plus": pct(aging["4plus"], agingDenominator),
+      "1mo": pct(aging["1mo"], pastDueCount),
+      "2mo": pct(aging["2mo"], pastDueCount),
+      "3mo": pct(aging["3mo"], pastDueCount),
+      "4plus": pct(aging["4plus"], pastDueCount),
     };
+
+    // % of past due that are on hold
+    const holdPastDuePct =
+      pastDueCount > 0 ? Math.round((holdPastDueCount / pastDueCount) * 100) : 0;
 
     return {
       totalClients,
@@ -226,7 +273,8 @@ export default function ReportingSummary() {
       promiseKeptRate,
       aging,
       agingPct,
-      agingDenominator,
+      holdPastDueCount,
+      holdPastDuePct,
       lastUpdated: new Date().toISOString(),
     };
   }, [clients]);
@@ -239,7 +287,6 @@ export default function ReportingSummary() {
     }).format(Number(n || 0));
 
   if (clients === null) {
-    // Loading skeleton (matches your clean card style)
     return (
       <Card sx={{ borderRadius: 3, mb: 2 }}>
         <CardHeader title="Collections Summary" />
@@ -256,7 +303,6 @@ export default function ReportingSummary() {
     );
   }
 
-  // In case there are no clients yet
   if (!summary) {
     return (
       <Card sx={{ borderRadius: 3, mb: 2 }}>
@@ -287,7 +333,7 @@ export default function ReportingSummary() {
         sx={{ "& .MuiCardHeader-title": { fontWeight: 700 } }}
       />
       <CardContent>
-        {/* Row 1: Core KPIs */}
+        {/* Row 1: Core KPIs (On Hold placed next to Past Due Clients) */}
         <Grid container spacing={2}>
           <Grid item xs={12} sm={6} md={3}>
             <KpiCard
@@ -315,18 +361,28 @@ export default function ReportingSummary() {
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <KpiCard
-              label="Total Amount Owed"
-              value={fmtMoney(summary.totalAmountOwed)}
-              color={summary.totalAmountOwed > 0 ? "error" : "success"}
-              tooltip="Sum of missed months × per-month installment for all past-due clients."
+              label="On Hold (of Past Due)"
+              value={summary.holdPastDueCount}
+              color={summary.holdPastDueCount > 0 ? "warning" : "success"}
+              tooltip="Clients flagged as case on hold due to outstanding payments, counted only among current past-due clients."
+              helper={`${summary.holdPastDuePct}% of ${summary.pastDueCount} past due`}
             />
           </Grid>
         </Grid>
 
         <Divider sx={{ my: 2 }} />
 
-        {/* Row 2: Promises */}
+        {/* Row 2: Money KPIs */}
         <Grid container spacing={2}>
+          <Grid item xs={12} sm={6} md={3}>
+            <KpiCard
+              label="Total Amount Owed"
+              value={fmtMoney(summary.totalAmountOwed)}
+              color={summary.totalAmountOwed > 0 ? "error" : "success"}
+              tooltip="Sum of missed months × per-month installment (capped by invoice total)."
+            />
+          </Grid>
+
           <Grid item xs={12} sm={6} md={3}>
             <KpiCard
               label="Promised This Month"
@@ -354,13 +410,13 @@ export default function ReportingSummary() {
 
         <Divider sx={{ my: 2 }} />
 
-        {/* Row 3: Aging buckets by missed months (with %) */}
+        {/* Row 3: Aging buckets */}
         <Grid container spacing={2}>
           <Grid item xs={12}>
             <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
               Aging by Missed Months{" "}
               <Box component="span" sx={{ color: "text.disabled" }}>
-                (base: {summary.agingDenominator} clients with valid start date/anchor)
+                (base: {summary.pastDueCount} past due clients)
               </Box>
             </Typography>
           </Grid>
@@ -428,10 +484,6 @@ function KpiCard({ label, value, color = "primary", tooltip, helper }) {
                     t.palette.mode === "dark"
                       ? t.palette[color]?.light || t.palette[color]?.main
                       : t.palette[color]?.main,
-                  textShadow:
-                    t.palette.mode === "dark"
-                      ? "0 0 0.6px rgba(255,255,255,0.6)"
-                      : "none",
                 })}
               >
                 {value}
@@ -449,7 +501,7 @@ function KpiCard({ label, value, color = "primary", tooltip, helper }) {
   );
 }
 
-/** Aging bucket card using a Chip accent; now shows count AND % */
+/** Aging bucket card using a Chip accent; shows count AND % */
 function AgingCard({ label, value, pct = 0, color = "warning" }) {
   return (
     <Card

@@ -13,6 +13,9 @@
   },
   "main": "index.js",
   "dependencies": {
+    "@fullcalendar/daygrid": "^6.1.19",
+    "@fullcalendar/interaction": "^6.1.19",
+    "@fullcalendar/react": "^6.1.19",
     "@sendgrid/mail": "^8.1.6",
     "dotenv": "^17.2.3",
     "firebase-admin": "^12.6.0",

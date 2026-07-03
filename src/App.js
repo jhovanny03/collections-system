@@ -20,8 +20,6 @@ import {
   getDocs,
   doc,
   getDoc,
-  updateDoc,
-  arrayUnion,
 } from "firebase/firestore";
 import db from "./firebase";
 
@@ -33,10 +31,11 @@ import ClientList from "./ClientList";
 import CreateClient from "./CreateClient";
 import ClientDashboard from "./ClientDashboard/ClientDashboard";
 import PromisedPaymentCalendar from "./PromisedPaymentCalendar";
-import FollowUps from "./FollowUps/FollowUps";
+import FollowUps from "./ClientFollowUps/FollowUps.jsx";
 import Dashboard from "./Dashboard/Dashboard";
 import UserManagement from "./admin/UserManagement.jsx";
 import ReportsPage from "./Reports/ReportsPage";
+import Level10 from "./Level10/index"; // ✅ ADDED
 
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -44,6 +43,7 @@ import Profile from "./pages/Profile";
 import Welcome from "./pages/Welcome";
 import Onboarding from "./pages/Onboarding";
 import ActionHandler from "./pages/ActionHandler";
+import ForgotPassword from "./pages/ForgotPassword"; // ✅ ADDED
 
 import { AuthProvider } from "./auth/AuthProvider";
 import PrivateRoute from "./auth/PrivateRoute";
@@ -66,15 +66,19 @@ function ThemeAndRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isAuthPage = ["/login"].includes(location.pathname);
+  const isLoginPage = location.pathname === "/login";
+  const isStandalonePage = ["/login", "/welcome", "/action", "/forgot-password"].includes(
+    location.pathname
+  );
+
   const [clients, setClients] = useState([]);
   const [mode, setMode] = useState("light");
 
   useEffect(() => {
-    if (user && location.pathname === "/login") {
+    if (user && isLoginPage) {
       navigate("/dashboard", { replace: true });
     }
-  }, [user, location.pathname, navigate]);
+  }, [user, isLoginPage, navigate]);
 
   useEffect(() => {
     if (!user) return;
@@ -105,31 +109,14 @@ function ThemeAndRoutes() {
     fetchClients();
   }, [user]);
 
-  const updateClientCommunication = async (clientId, newEntry) => {
-    try {
-      const clientRef = doc(db, "clients", clientId);
-      await updateDoc(clientRef, { communicationLog: arrayUnion(newEntry) });
-      setClients((prev) =>
-        prev.map((c) =>
-          c.id === clientId
-            ? { ...c, communicationLog: [...(c.communicationLog || []), newEntry] }
-            : c
-        )
-      );
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  // 🎨 EXECUTIVE COOL THEME
   const theme = useMemo(
     () =>
       createTheme({
         palette: {
           mode,
-          primary: { main: "#0b3a75" }, // Federal Blue
-          secondary: { main: "#00a693" }, // Persian Green
-          error: { main: "#d44500" }, // Syracuse Red-Orange
+          primary: { main: "#0b3a75" },
+          secondary: { main: "#00a693" },
+          error: { main: "#d44500" },
           background: {
             default: mode === "light" ? "#f6f8fa" : "#0f1621",
             paper: mode === "light" ? "#ffffff" : "#1a2332",
@@ -148,10 +135,7 @@ function ThemeAndRoutes() {
         components: {
           MuiButton: {
             styleOverrides: {
-              root: {
-                borderRadius: 10,
-                fontWeight: 600,
-              },
+              root: { borderRadius: 10, fontWeight: 600 },
               containedPrimary: {
                 backgroundColor: "#00a693",
                 "&:hover": { backgroundColor: "#00877c" },
@@ -169,7 +153,7 @@ function ThemeAndRoutes() {
 
   const toggleColorMode = () => setMode((prev) => (prev === "light" ? "dark" : "light"));
 
-  if (isAuthPage) {
+  if (isLoginPage) {
     if (authLoading)
       return (
         <Box
@@ -222,13 +206,15 @@ function ThemeAndRoutes() {
         }}
       />
       <Box sx={{ display: "flex" }}>
-        {!isAuthPage && <Sidebar />}
+        {!isStandalonePage && <Sidebar />}
         <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
           <PageTransition>
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/welcome" element={<Welcome />} />
               <Route path="/action" element={<ActionHandler />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+
               <Route
                 path="/onboarding"
                 element={
@@ -237,6 +223,7 @@ function ThemeAndRoutes() {
                   </PrivateRoute>
                 }
               />
+
               <Route
                 path="/*"
                 element={
@@ -247,7 +234,6 @@ function ThemeAndRoutes() {
                         <Route path="/dashboard" element={<Dashboard />} />
                         <Route path="/clients" element={<ClientList clients={clients} />} />
                         <Route path="/client/:clientId" element={<ClientDashboard />} />
-
                         <Route
                           path="/create-client"
                           element={
@@ -268,14 +254,10 @@ function ThemeAndRoutes() {
                           path="/follow-ups"
                           element={
                             <EditorRoute>
-                              <FollowUps
-                                clients={clients}
-                                updateClientCommunication={updateClientCommunication}
-                              />
+                              <FollowUps />
                             </EditorRoute>
                           }
                         />
-
                         <Route path="/profile" element={<Profile />} />
                         <Route
                           path="/register"
@@ -294,8 +276,10 @@ function ThemeAndRoutes() {
                           }
                         />
 
-                        {/* Reports for all roles */}
+                        {/* Reports + Level10 */}
                         <Route path="/reports" element={<ReportsPage />} />
+                        <Route path="/level10" element={<Level10 />} /> {/* ✅ ADDED */}
+
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                       </Routes>
                     </Layout>

@@ -1,4 +1,3 @@
-// CreateClient.js
 import React, { useState } from "react";
 import db from "./firebase";
 import { collection, addDoc, doc, getDoc } from "firebase/firestore";
@@ -38,6 +37,7 @@ const CASE_TYPES = [
   "I751 ECB",
   "I90",
   "ASYLUM",
+  "REMOVAL DEFENSE", // ✅ NEW CASE TYPE
 ];
 
 const CASE_STATUSES = ["ACTIVE", "FILED", "APPROVED"];
@@ -65,7 +65,7 @@ export default function CreateClient({ onClientCreated }) {
     setMyCaseLink("");
     setCaseType("");
     setCaseStatus("");
-    setCaseTitle("");        // ✅ reset case title too
+    setCaseTitle(""); // ✅ reset case title too
   };
 
   const handleSubmit = async (e) => {
@@ -80,10 +80,10 @@ export default function CreateClient({ onClientCreated }) {
       myCaseLink: myCaseLink.trim(),
       caseType,
       caseStatus,
-      status: "active",     // default status for new client
-      payments: [],         // ensure the array exists for InvoiceSection
+      status: "active", // default status for new client
+      payments: [], // ensure the array exists for InvoiceSection
       createdAt: new Date().toISOString(),
-      // ✅ include caseTitle only if provided (or keep empty string if you prefer)
+      // ✅ include caseTitle only if provided
       ...(title ? { caseTitle: title } : { caseTitle: "" }),
     };
 
@@ -279,7 +279,16 @@ export default function CreateClient({ onClientCreated }) {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setBillingOpen(false)}>Done</Button>
+          <Button
+            onClick={() => {
+              if (newClient?.id) {
+                window.open(`/client/${newClient.id}`, "_blank", "noopener");
+              }
+              setBillingOpen(false);
+            }}
+          >
+            Done
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

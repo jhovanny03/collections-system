@@ -89,6 +89,8 @@ export default function Sidebar({
     { text: "Dashboard", icon: <BarChartIcon />, to: "/dashboard" },
     { text: "View Clients", icon: <PeopleIcon />, to: "/clients" },
     { text: "Reports", icon: <AssessmentIcon />, to: "/reports" },
+    // ✅ Added: Level 10 Meeting route (icon reused to avoid new imports)
+    { text: "Level 10 Meeting", icon: <AssessmentIcon />, to: "/level10" },
   ];
   const editorItems = [
     { text: "Create Client", icon: <PersonAddIcon />, to: "/create-client" },

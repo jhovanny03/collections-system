@@ -57,10 +57,10 @@ export default function BillingOverview({ client }) {
   const allPayments = client?.payments || [];
   const rawStart = client.firstInstallmentDate;
 
-  // ✅ Keep hooks here (before any conditional return)
-  const [error, setError] = React.useState(null);
+  // ✅ Collectible cap = what’s left to collect after the initial payment
+  const collectibleCap = Math.max(0, invoiceEffective - initialPayment);
 
-  // If no start date, mark error but still return after hooks
+  const [error, setError] = React.useState(null);
   React.useEffect(() => {
     if (!rawStart) setError("Missing first installment date.");
     else setError(null);
@@ -98,6 +98,7 @@ export default function BillingOverview({ client }) {
     return 500; // default
   };
 
+  // ✅ EXCLUDE the initial (down) payment from installments: ONLY strictly after initialPaymentDate
   const paymentsAfterInitial = allPayments.filter(
     (p) => new Date(p.date) > new Date(client.initialPaymentDate)
   );
@@ -106,7 +107,7 @@ export default function BillingOverview({ client }) {
     date: p.date,
   }));
 
-  // build months up to cutoff
+  // ---------- build months up to cutoff (cap by invoice total) ----------
   const monthsUpToCutoff = [];
   if (!isClosed) {
     const cutoff =
@@ -119,13 +120,21 @@ export default function BillingOverview({ client }) {
         : today;
 
     const cursor = new Date(firstDueDate);
+    let expectedAccum = 0; // running total of expected installments
     while (cursor <= cutoff) {
-      if (!monthIsSkipped(cursor)) monthsUpToCutoff.push(new Date(cursor));
+      if (!monthIsSkipped(cursor)) {
+        const amt = getInstallmentAmountForDate(cursor);
+        if (expectedAccum >= collectibleCap) break;
+        if (expectedAccum + amt > collectibleCap) break;
+
+        monthsUpToCutoff.push(new Date(cursor));
+        expectedAccum += amt;
+      }
       cursor.setMonth(cursor.getMonth() + 1);
     }
   }
 
-  // apply FIFO to past months
+  // ---------- allocate payments FIFO ----------
   let validTotalPaid = 0;
   const dueMonths = [];
   for (const monthDate of monthsUpToCutoff) {
@@ -144,7 +153,7 @@ export default function BillingOverview({ client }) {
     }
   }
 
-  // handle future prepayments
+  // ---------- handle future prepayments ----------
   if (!isClosed && !isPaused) {
     let leftover = paymentPool.reduce((s, p) => s + (p.amount || 0), 0);
     if (leftover > 0) {
@@ -178,7 +187,12 @@ export default function BillingOverview({ client }) {
   );
   const remainingBalance = isClosed ? 0 : computedRemaining;
 
-  // find first unpaid month
+  // ✅ If fully paid, clear due months
+  if (remainingBalance <= 0) {
+    dueMonths.length = 0;
+  }
+
+  // ---------- simulate unpaid to find next month ----------
   const simPool = paymentsAfterInitial.map((p) => ({
     amount: Number(p.amount),
     date: p.date,
@@ -208,7 +222,7 @@ export default function BillingOverview({ client }) {
     guardSim++;
   }
 
-  // project future months
+  // ---------- project future months ----------
   const futureMonths = [];
   if (!isClosed && !isPaused && remainingBalance > 0) {
     let futureStartDate = new Date(firstUnpaid);
@@ -235,7 +249,6 @@ export default function BillingOverview({ client }) {
     }
   }
 
-  // ✅ useMemo always runs
   const expectedSegments = React.useMemo(() => {
     if (!futureMonths.length) return [];
     const segs = [];
@@ -262,13 +275,26 @@ export default function BillingOverview({ client }) {
     return segs;
   }, [futureMonths]);
 
-  // ✅ now safe to return (hooks above)
   if (error) return <Typography color="error">{error}</Typography>;
 
   // ---------- UI ----------
   const getLastPaymentDisplay = () => {
-    if (!allPayments.length) return "N/A";
-    const latest = allPayments.reduce((latest, p) =>
+    // ✅ show last INSTALLMENT payment (exclude initial)
+    const installmentPays = paymentsAfterInitial;
+    if (!installmentPays.length) {
+      if (client.initialPaymentDate && client.initialPaymentAmount) {
+        const d = new Date(client.initialPaymentDate).toLocaleDateString("default", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
+        return `No installments recorded — Initial on ${d} – $${Number(
+          client.initialPaymentAmount
+        ).toLocaleString()}`;
+      }
+      return "No installments recorded";
+    }
+    const latest = installmentPays.reduce((latest, p) =>
       new Date(p.date) > new Date(latest.date) ? p : latest
     );
     const dateStr = new Date(latest.date).toLocaleDateString("default", {
@@ -313,6 +339,8 @@ export default function BillingOverview({ client }) {
       : 0;
   const statusColor = isClosed ? "default" : isPaused ? "warning" : "success";
 
+  const isPaidInFull = remainingBalance <= 0;
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
       <Card elevation={3} sx={{ borderRadius: 3, mb: 4 }}>
@@ -321,12 +349,24 @@ export default function BillingOverview({ client }) {
             <Typography variant="h6" fontWeight="bold">
               Billing Overview
             </Typography>
-            <Chip
-              label={status.toUpperCase()}
-              color={statusColor}
-              variant={isPaused ? "filled" : "outlined"}
-              size="small"
-            />
+
+            {/* ✅ Status + Paid-in-Full Chips */}
+            <Stack direction="row" spacing={1}>
+              <Chip
+                label={status.toUpperCase()}
+                color={statusColor}
+                variant={isPaused ? "filled" : "outlined"}
+                size="small"
+              />
+              {isPaidInFull && (
+                <Chip
+                  label="PAID IN FULL"
+                  color="success"
+                  variant="filled"
+                  size="small"
+                />
+              )}
+            </Stack>
           </Box>
 
           <Box sx={{ mb: 3 }}>

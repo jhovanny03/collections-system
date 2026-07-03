@@ -1,8 +1,22 @@
 import React, { useMemo, useState } from "react";
 import {
-  Card, CardHeader, CardContent, Box, Stack, TextField, MenuItem,
-  Button, Divider, Chip, Tooltip, IconButton, ToggleButtonGroup, ToggleButton,
-  useTheme, alpha
+  Card,
+  CardHeader,
+  CardContent,
+  Box,
+  Stack,
+  TextField,
+  MenuItem,
+  Button,
+  Divider,
+  Chip,
+  Tooltip,
+  IconButton,
+  ToggleButtonGroup,
+  ToggleButton,
+  useTheme,
+  alpha,
+  Typography,
 } from "@mui/material";
 import * as XLSX from "xlsx";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -19,16 +33,29 @@ import CollectionsPeriodChart from "./components/CollectionsPeriodChart";
 import {
   ByPeriodTable,
   ByCaseTypeTable,
-  ByClientTable
+  ByClientTable,
 } from "./components/CollectionsTables";
 
 const GROUPINGS = ["Day", "Week", "Month"];
+
+// ✅ Updated quick filters: MTD, Last 3 Months, YTD
 const QUICK = [
   { key: "MTD", label: "MTD" },
-  { key: "QTD", label: "QTD" },
+  { key: "L3M", label: "Last 3 Months" },
   { key: "YTD", label: "YTD" },
-  { key: "30D", label: "Last 30d" },
 ];
+
+const money = (n) => `$${Number(n || 0).toLocaleString()}`;
+
+// Aging buckets definition (days past due)
+const AGING_BUCKETS_DEF = [
+  { key: "0-30", label: "0–30 days", min: 0, max: 30 },
+  { key: "31-60", label: "31–60 days", min: 31, max: 60 },
+  { key: "61-90", label: "61–90 days", min: 61, max: 90 },
+  { key: "90+", label: "90+ days", min: 91, max: Infinity },
+];
+
+const DUE_DAY = 15;
 
 /** Small helper */
 const Section = ({ title, subtitle, children, action }) => (
@@ -47,6 +74,214 @@ const Section = ({ title, subtitle, children, action }) => (
   </Card>
 );
 
+// Compact AR aging visual
+function AgingBucketsStrip({ rows = [] }) {
+  if (!rows.length) {
+    return (
+      <Box sx={{ color: "text.secondary", fontSize: 14, py: 1 }}>
+        No past-due amounts in this range.
+      </Box>
+    );
+  }
+
+  return (
+    <Stack
+      direction={{ xs: "column", md: "row" }}
+      spacing={2}
+      sx={{ mt: 1 }}
+    >
+      {rows.map((r) => (
+        <Box
+          key={r.key}
+          sx={{
+            flex: 1,
+            p: 1.5,
+            borderRadius: 2,
+            border: "1px solid",
+            borderColor: "divider",
+            bgcolor: "background.default",
+          }}
+        >
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems="center"
+            sx={{ mb: 0.5 }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              {r.label}
+            </Typography>
+            <Chip
+              size="small"
+              label={r.clients === 1 ? "1 client" : `${r.clients || 0} clients`}
+              variant="outlined"
+            />
+          </Stack>
+          <Typography variant="h6" sx={{ fontWeight: 800 }}>
+            {money(r.remaining)}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Remaining • Expected {money(r.expected)} • Collected {money(r.actual)}
+          </Typography>
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+
+/* ======================
+   ReportingSummary-aligned snapshot (for AR Aging alignment)
+   - Uses "as of today"
+   - Produces: amountDue, missedMonths, oldestUnpaidDueDate, isPaidInFull
+   ====================== */
+function computeBillingSnapshotAligned(client, now = new Date()) {
+  const status = (client?.status || "active").toLowerCase();
+  const isClosed = status === "closed";
+  const isPaused = status === "paused";
+
+  const toDateSafe = (v) =>
+    v?.toDate?.() ? v.toDate() : isNaN(new Date(v)) ? null : new Date(v);
+
+  const invoiceBase = Number(client?.invoiceTotal || 0);
+  const adjustments = Array.isArray(client?.invoiceAdjustments)
+    ? client.invoiceAdjustments
+    : [];
+  const adjToBalanceTotal = adjustments.reduce((sum, a) => {
+    const applyTo = (a?.applyTo || "balance").toLowerCase();
+    const amt = Number(a?.amount || 0);
+    const dp = Number(a?.downPayment || 0);
+    return applyTo === "balance" ? sum + (amt - dp) : sum;
+  }, 0);
+  const invoiceEffective = Math.max(0, invoiceBase + adjToBalanceTotal);
+
+  const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
+  const collectibleCap = Math.max(0, invoiceEffective - initialPayment);
+
+  if (!client?.firstInstallmentDate) {
+    const remainingBalance = Math.max(0, invoiceEffective - initialPayment);
+    const isPaidInFull = remainingBalance <= 0 || isClosed;
+    return { amountDue: 0, missedMonths: 0, oldestUnpaidDueDate: null, isPaidInFull };
+  }
+
+  const planStart = toDateSafe(client.firstInstallmentDate);
+  if (!planStart || isNaN(planStart)) {
+    const remainingBalance = Math.max(0, invoiceEffective - initialPayment);
+    const isPaidInFull = remainingBalance <= 0 || isClosed;
+    return { amountDue: 0, missedMonths: 0, oldestUnpaidDueDate: null, isPaidInFull };
+  }
+
+  const firstDueDate = new Date(planStart.getFullYear(), planStart.getMonth(), DUE_DAY);
+
+  const pauseStartedAt = client?.pauseStartedAt ? toDateSafe(client.pauseStartedAt) : null;
+  const cutoff =
+    isPaused && pauseStartedAt
+      ? new Date(
+          pauseStartedAt.getFullYear(),
+          pauseStartedAt.getMonth(),
+          pauseStartedAt.getDate() >= DUE_DAY ? DUE_DAY : DUE_DAY - 1
+        )
+      : now;
+
+  const skipSet = new Set((client?.skipMonths || []).map(String));
+  const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+  const ymKeyLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+  const monthIsSkipped = (d) => skipSet.has(ymKeyLocal(d));
+
+  const schedule = (client?.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const getInstallmentAmountForDate = (date) => {
+    if (!Array.isArray(schedule) || schedule.length === 0) return 500;
+    for (let i = 0; i < schedule.length; i++) {
+      const s = schedule[i];
+      const sStart = new Date(s.start);
+      const sEnd = new Date(s.end);
+      if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
+    }
+    return 500;
+  };
+
+  const monthsUpToCutoff = [];
+  if (!isClosed) {
+    const cursor = new Date(firstDueDate);
+    let expectedAccum = 0;
+
+    while (cursor <= cutoff) {
+      if (!monthIsSkipped(cursor)) {
+        const amt = getInstallmentAmountForDate(cursor);
+
+        if (expectedAccum >= collectibleCap) break;
+        if (expectedAccum + amt > collectibleCap) break;
+
+        monthsUpToCutoff.push(new Date(cursor));
+        expectedAccum += amt;
+      }
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  const allPayments = client?.payments || [];
+  const initialPaymentDate = client?.initialPaymentDate
+    ? new Date(client.initialPaymentDate)
+    : null;
+
+  const paymentsAfterInitial = initialPaymentDate
+    ? allPayments.filter((p) => new Date(p.date) > initialPaymentDate)
+    : allPayments.slice();
+
+  const pool = paymentsAfterInitial.map((p) => ({
+    amount: Number(p.amount || 0),
+    date: p.date,
+  }));
+
+  let validTotalPaid = 0;
+  const dueMonths = [];
+  let oldestUnpaidDueDate = null;
+
+  for (const monthDate of monthsUpToCutoff) {
+    const monthAmt = getInstallmentAmountForDate(schedule, monthDate);
+    let monthPaid = 0;
+
+    for (const p of pool) {
+      if (p.amount <= 0) continue;
+      if (monthPaid >= monthAmt) break;
+
+      const used = Math.min(monthAmt - monthPaid, p.amount);
+      monthPaid += used;
+      p.amount -= used;
+      validTotalPaid += used;
+    }
+
+    if (monthPaid < monthAmt) {
+      dueMonths.push({ amount: monthAmt });
+      if (!oldestUnpaidDueDate) oldestUnpaidDueDate = new Date(monthDate);
+    }
+  }
+
+  const leftover = pool.reduce((s, p) => s + (p.amount || 0), 0);
+  const capRoom = Math.max(0, collectibleCap - validTotalPaid);
+  if (leftover > 0 && capRoom > 0) {
+    validTotalPaid += Math.min(leftover, capRoom);
+  }
+
+  const remainingBalance = Math.max(0, invoiceEffective - initialPayment - validTotalPaid);
+  const isPaidInFull = remainingBalance <= 0 || isClosed;
+
+  if (isPaidInFull) {
+    return { amountDue: 0, missedMonths: 0, oldestUnpaidDueDate: null, isPaidInFull: true };
+  }
+
+  const amountDue = dueMonths.reduce((sum, m) => sum + (Number(m.amount) || 0), 0);
+  const missedMonths = dueMonths.length;
+
+  if (isClosed) {
+    return { amountDue: 0, missedMonths: 0, oldestUnpaidDueDate: null, isPaidInFull: true };
+  }
+
+  return { amountDue, missedMonths, oldestUnpaidDueDate, isPaidInFull: false };
+}
+
 export default function CollectionsReport({ clients = [] }) {
   const theme = useTheme();
   const [from, setFrom] = useState(() => toYMD(startOfMonth(new Date())));
@@ -63,11 +298,11 @@ export default function CollectionsReport({ clients = [] }) {
     return ["Any", ...Array.from(set)];
   }, [clients]);
 
-  // Basic row-level filtering before any computation
   const filteredClients = useMemo(() => {
     return (clients || []).filter((c) => {
       if (caseType !== "Any" && (c.caseType || "") !== caseType) return false;
-      if (caseStatus !== "Any" && (c.caseStatus || "") !== caseStatus) return false;
+      if (caseStatus !== "Any" && (c.caseStatus || "") !== caseStatus)
+        return false;
 
       if (billingStatus !== "Any") {
         const s = (c.billingStatus || c.status || "active").toLowerCase();
@@ -77,63 +312,135 @@ export default function CollectionsReport({ clients = [] }) {
     });
   }, [clients, caseType, caseStatus, billingStatus]);
 
-  // 👉 Headline KPIs & chart (unchanged logic)
   const computed = useMemo(() => {
-    const start = startOfMonth(new Date(from));
-    const end = startOfMonth(new Date(to));
+    const start = startOfMonth(parseYMD(from));
+    const end = startOfMonth(parseYMD(to)); // computeCollectionsByPeriod expects month boundaries
     return computeCollectionsByPeriod(filteredClients, start, end);
   }, [filteredClients, from, to]);
 
-  // 👉 Per-client allocator for breakdowns (unchanged logic)
-  const { byClientRows, byCaseTypeRows } = useMemo(() => {
-    const rangeStart = startOfMonth(new Date(from));
-    const rangeEnd = startOfMonth(new Date(to)); // monthly grain
-    const byClient = [];
-    const byCaseTypeAcc = new Map();
+  const { byClientRows, byCaseTypeRows, agingBuckets, actionListRows } =
+    useMemo(() => {
+      const rangeStart = startOfMonth(parseYMD(from));
+      const rangeEnd = parseYMD(to);
+      const asOf = new Date();
 
-    for (const c of filteredClients) {
-      const alloc = allocateClientByDueMonth(c, rangeStart, rangeEnd);
+      const byClient = [];
+      const byCaseTypeAcc = new Map();
 
-      // Roll up for this client inside range
-      let expected = 0;
-      let collected = 0;
-      for (const [ym, rec] of alloc.months.entries()) {
-        if (monthInRange(ym, rangeStart, rangeEnd)) {
-          expected += rec.expected;
-          collected += rec.collected;
-        }
-      }
-      const variance = expected - collected;
-
-      byClient.push({
-        id: c.id,
-        name: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.id,
-        caseType: c.caseType || "—",
-        status: (c.billingStatus || c.status || "active").toLowerCase(),
-        expected,
-        actual: collected,
-        variance,
-        lastPaymentDate: lastPaymentDate(c),
+      const bucketAgg = new Map();
+      AGING_BUCKETS_DEF.forEach((b) => {
+        bucketAgg.set(b.key, {
+          ...b,
+          expected: 0,
+          actual: 0,
+          remaining: 0,
+          clientsSet: new Set(),
+        });
       });
 
-      // Accumulate by case type
-      const key = c.caseType || "—";
-      const prev = byCaseTypeAcc.get(key) || { caseType: key, expected: 0, actual: 0, variance: 0, clients: 0 };
-      prev.expected += expected;
-      prev.actual += collected;
-      prev.variance = prev.expected - prev.actual;
-      prev.clients += 1;
-      byCaseTypeAcc.set(key, prev);
-    }
+      for (const c of filteredClients) {
+        const alloc = allocateClientByDueMonth(c, rangeStart, rangeEnd, asOf);
 
-    // Sort for nice display
-    byClient.sort((a, b) => (b.expected - b.actual) - (a.expected - a.actual));
-    const byCaseType = Array.from(byCaseTypeAcc.values()).sort((a, b) => b.expected - a.expected);
+        let expected = 0;
+        let collected = 0;
 
-    return { byClientRows: byClient, byCaseTypeRows: byCaseType };
-  }, [filteredClients, from, to]);
+        for (const [ym, rec] of alloc.months.entries()) {
+          const recExpected = Number(rec.expected || 0);
+          const recCollected = Number(rec.collected || 0);
 
-  // Adapt to child shapes (unchanged fields)
+          if (monthInRange(ym, rangeStart, rangeEnd)) {
+            expected += recExpected;
+            collected += recCollected;
+          }
+        }
+
+        const variance = expected - collected;
+
+        const snap = computeBillingSnapshotAligned(c, asOf);
+        const isPastDueAligned = snap.missedMonths > 0 && !snap.isPaidInFull;
+        const clientPastDueTotal = isPastDueAligned ? Number(snap.amountDue || 0) : 0;
+
+        if (isPastDueAligned && snap.oldestUnpaidDueDate) {
+          const daysDiff = Math.floor(
+            (asOf.getTime() - snap.oldestUnpaidDueDate.getTime()) /
+              (1000 * 60 * 60 * 24)
+          );
+
+          if (!isNaN(daysDiff) && daysDiff >= 0) {
+            const bucketDef = AGING_BUCKETS_DEF.find(
+              (b) => daysDiff >= b.min && daysDiff <= b.max
+            );
+            if (bucketDef) {
+              const agg = bucketAgg.get(bucketDef.key);
+              agg.clientsSet.add(c.id);
+
+              const due = Number(snap.amountDue || 0);
+              agg.expected += due;
+              agg.actual += 0;
+              agg.remaining += due;
+            }
+          }
+        }
+
+        byClient.push({
+          id: c.id,
+          name: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.id,
+          caseType: c.caseType || "—",
+          status: (c.billingStatus || c.status || "active").toLowerCase(),
+          expected,
+          actual: collected,
+          variance,
+          lastPaymentDate: lastPaymentDate(c),
+          totalPastDue: clientPastDueTotal,
+        });
+
+        const key = c.caseType || "—";
+        const prev =
+          byCaseTypeAcc.get(key) || {
+            caseType: key,
+            expected: 0,
+            actual: 0,
+            variance: 0,
+            clients: 0,
+          };
+        prev.expected += expected;
+        prev.actual += collected;
+        prev.variance = prev.expected - prev.actual;
+        prev.clients += 1;
+        byCaseTypeAcc.set(key, prev);
+      }
+
+      byClient.sort(
+        (a, b) => b.expected - b.actual - (a.expected - a.actual)
+      );
+      const byCaseType = Array.from(byCaseTypeAcc.values()).sort(
+        (a, b) => b.expected - a.expected
+      );
+
+      const agingBucketsArr = Array.from(bucketAgg.values())
+        .map((b) => ({
+          key: b.key,
+          label: b.label,
+          expected: b.expected,
+          actual: b.actual,
+          remaining: b.remaining,
+          clients: b.clientsSet.size,
+        }))
+        .filter((b) => b.expected > 0 || b.remaining > 0);
+
+      const actionList = byClient
+        .filter((r) => r.totalPastDue > 0)
+        .sort((a, b) => b.totalPastDue - a.totalPastDue)
+        .slice(0, 20);
+
+      return {
+        byClientRows: byClient,
+        byCaseTypeRows: byCaseType,
+        agingBuckets: agingBucketsArr,
+        actionListRows: actionList,
+      };
+    }, [filteredClients, from, to]);
+
   const data = useMemo(() => {
     const rows = (computed?.rows || []).map((r) => ({
       label: r.label,
@@ -162,6 +469,8 @@ export default function CollectionsReport({ clients = [] }) {
         ...r,
         ratePct: r.expected > 0 ? Math.min(100, (r.actual / r.expected) * 100) : 0,
       })),
+      agingBuckets,
+      actionList: actionListRows,
       totals: {
         expected: totals.expected,
         actual: totals.collected,
@@ -170,12 +479,11 @@ export default function CollectionsReport({ clients = [] }) {
         excess: totals.excessCollected,
       },
     };
-  }, [computed, byCaseTypeRows, byClientRows]);
+  }, [computed, byCaseTypeRows, byClientRows, agingBuckets, actionListRows]);
 
   const exportGrid = () => {
     const wb = XLSX.utils.book_new();
 
-    // Summary
     const sumSheet = XLSX.utils.json_to_sheet([
       {
         From: from,
@@ -189,7 +497,6 @@ export default function CollectionsReport({ clients = [] }) {
     ]);
     XLSX.utils.book_append_sheet(wb, sumSheet, "Summary");
 
-    // By Period
     const byPeriod = (data?.byPeriod || []).map((r) => ({
       Period: r.label,
       Expected: r.expected,
@@ -200,7 +507,6 @@ export default function CollectionsReport({ clients = [] }) {
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byPeriod), "ByPeriod");
 
-    // By CaseType
     const byCT = (data?.byCaseType || []).map((r) => ({
       "Case Type": r.caseType || "—",
       Expected: r.expected,
@@ -211,7 +517,6 @@ export default function CollectionsReport({ clients = [] }) {
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byCT), "ByCaseType");
 
-    // By Client
     const byClient = (data?.byClient || []).map((r) => ({
       Client: r.name,
       "Case Type": r.caseType || "—",
@@ -222,6 +527,7 @@ export default function CollectionsReport({ clients = [] }) {
       "Rate % (capped)": r.ratePct,
       "Last Payment": r.lastPaymentDate || "—",
       "Client ID": r.id,
+      "Total Past Due": r.totalPastDue || 0,
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byClient), "ByClient");
 
@@ -230,31 +536,28 @@ export default function CollectionsReport({ clients = [] }) {
 
   const applyQuick = (key) => {
     const d = new Date();
+
     if (key === "MTD") {
       setFrom(toYMD(startOfMonth(d)));
       setTo(toYMD(d));
-    } else if (key === "QTD") {
-      setFrom(toYMD(startOfQuarter(d)));
+    } else if (key === "L3M") {
+      const start3 = new Date(d.getFullYear(), d.getMonth() - 2, 1);
+      setFrom(toYMD(start3));
       setTo(toYMD(d));
     } else if (key === "YTD") {
-      setFrom(`${d.getFullYear()}-01-01`);
-      setTo(toYMD(d));
-    } else if (key === "30D") {
-      const p = new Date(d);
-      p.setDate(p.getDate() - 30);
-      setFrom(toYMD(p));
+      const jan1 = new Date(d.getFullYear(), 0, 1);
+      setFrom(toYMD(jan1));
       setTo(toYMD(d));
     }
   };
 
-  const headerBg = `linear-gradient(90deg, ${alpha(theme.palette.primary.main, 0.08)}, ${alpha(
-    theme.palette.secondary.main,
+  const headerBg = `linear-gradient(90deg, ${alpha(
+    theme.palette.primary.main,
     0.08
-  )})`;
+  )}, ${alpha(theme.palette.secondary.main, 0.08)})`;
 
   return (
     <Card sx={{ borderRadius: 3 }}>
-      {/* Fancy header strip with filters inline */}
       <Box
         sx={{
           px: 3,
@@ -286,7 +589,6 @@ export default function CollectionsReport({ clients = [] }) {
 
           <Box flexGrow={1} />
 
-          {/* Quick chips */}
           <Stack direction="row" spacing={1} flexWrap="wrap">
             {QUICK.map((q) => (
               <Chip
@@ -303,7 +605,6 @@ export default function CollectionsReport({ clients = [] }) {
       </Box>
 
       <CardContent sx={{ pt: 2 }}>
-        {/* Filters Row */}
         <Section
           title="Filters"
           subtitle="Pick a date range and narrow by attributes"
@@ -430,17 +731,14 @@ export default function CollectionsReport({ clients = [] }) {
 
         <Divider sx={{ my: 2 }} />
 
-        {/* KPIs */}
         <CollectionsSummary totals={data?.totals} />
 
         <Divider sx={{ my: 2 }} />
 
-        {/* Chart */}
         <CollectionsPeriodChart byPeriod={data?.byPeriod || []} />
 
         <Divider sx={{ my: 2 }} />
 
-        {/* Tables */}
         <Box sx={{ display: "grid", gap: 2 }}>
           <Section title="By Period" subtitle="Expected vs Actual by month">
             <ByPeriodTable rows={data?.byPeriod || []} dense={dense} />
@@ -450,9 +748,11 @@ export default function CollectionsReport({ clients = [] }) {
             <ByCaseTypeTable rows={data?.byCaseType || []} dense={dense} />
           </Section>
 
+          {/* ✅ AR Aging Buckets UI hidden (logic kept) */}
+
           <Section
-            title="By Client"
-            subtitle="Client-level detail within the selected range"
+            title="Collections Action List"
+            subtitle="Top clients with past-due balances to prioritize follow-up"
             action={
               <Button
                 size="small"
@@ -464,7 +764,7 @@ export default function CollectionsReport({ clients = [] }) {
               </Button>
             }
           >
-            <ByClientTable rows={data?.byClient || []} dense={dense} />
+            <ByClientTable rows={data?.actionList || []} dense={dense} />
           </Section>
         </Box>
       </CardContent>
@@ -473,83 +773,118 @@ export default function CollectionsReport({ clients = [] }) {
 }
 
 /* ======================
-   Per-client allocation
+   Per-client allocation (CANONICAL / CAP-AWARE / OPTION #1 paused)
    ====================== */
 
-// Build the per-client due-month ledger and allocate payments oldest-first.
-function allocateClientByDueMonth(client, rangeStart, rangeEnd) {
+function allocateClientByDueMonth(client, rangeStart, rangeEnd, asOf) {
   const status = (client.billingStatus || client.status || "active").toLowerCase();
   const isClosed = status === "closed";
+  if (isClosed) return { months: new Map() };
 
-  // Dates
-  const firstInstallmentRaw = client.firstInstallmentDate;
-  if (!firstInstallmentRaw) return { months: new Map() };
+  // ✅ OPTION #1 alignment: paused contributes nothing
+  if (status === "paused") return { months: new Map() };
 
-  const firstInstallmentDate =
-    firstInstallmentRaw?.seconds
-      ? new Date(firstInstallmentRaw.seconds * 1000)
-      : new Date(firstInstallmentRaw);
+  const toDateSafe = (v) =>
+    v?.toDate?.() ? v.toDate() : isNaN(new Date(v)) ? null : new Date(v);
 
-  // due on the 15th
-  const firstDue = new Date(firstInstallmentDate.getFullYear(), firstInstallmentDate.getMonth(), 15);
+  const firstInstallmentDate = toDateSafe(client.firstInstallmentDate);
+  if (!firstInstallmentDate) return { months: new Map() };
 
-  // Pause logic (stop accruing on/after pause month)
-  const pauseStart = client.pauseStartedAt
-    ? (client.pauseStartedAt?.seconds
-        ? new Date(client.pauseStartedAt.seconds * 1000)
-        : new Date(client.pauseStartedAt))
-    : null;
-  const pauseCutoffYM = pauseStart ? ymKey(new Date(pauseStart.getFullYear(), pauseStart.getMonth(), 1)) : null;
+  function computeInvoiceEffective(c) {
+    const base = Number(c?.invoiceTotal || 0);
+    const adjustments = Array.isArray(c?.invoiceAdjustments) ? c.invoiceAdjustments : [];
+    const adjToBalanceTotal = adjustments.reduce((sum, a) => {
+      const applyTo = (a?.applyTo || "balance").toLowerCase();
+      const amt = Number(a?.amount || 0);
+      const dp = Number(a?.downPayment || 0);
+      return applyTo === "balance" ? sum + (amt - dp) : sum;
+    }, 0);
+    return Math.max(0, base + adjToBalanceTotal);
+  }
 
-  // Skip logic (array of "YYYY-MM")
-  const skipSet = new Set((client.skipMonths || []).map(String));
+  function getCollectibleCap(c) {
+    const invoiceEffective = computeInvoiceEffective(c);
+    const initialPayment = Number(c?.initialPaymentAmount || 0);
+    return Math.max(0, invoiceEffective - initialPayment);
+  }
 
-  // Schedule
+  const collectibleCap = getCollectibleCap(client);
+  if (collectibleCap <= 0) return { months: new Map() };
+
+  const skipSet = new Set((client.skipMonths || client.skippedMonths || []).map(String));
+
   const schedule = (client.installmentSchedule || [])
     .slice()
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 
-  const getInstallmentAmountFor = (date) => {
+  const getInstallmentAmountForDate = (date) => {
+    if (!Array.isArray(schedule) || schedule.length === 0) {
+      return Number(client.installmentAmount || 500);
+    }
     for (const s of schedule) {
       const sStart = new Date(s.start);
       const sEnd = new Date(s.end);
-      if (date >= sStart && date <= sEnd) return Number(s.amount || 0);
+      if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
     }
     return Number(client.installmentAmount || 500);
   };
 
-  // Build due months from firstDue up to rangeEnd (monthly)
-  const months = new Map(); // ym -> { expected, collected }
-  if (!isClosed) {
-    const cursor = new Date(firstDue);
-    const hardEnd = new Date(rangeEnd);
-    hardEnd.setMonth(hardEnd.getMonth() + 1); // include end month generation
+  const DUE_DAY = 15;
+  const months = new Map();
 
-    while (cursor < hardEnd) {
-      const ym = ymKey(cursor);
+  const firstDue = new Date(
+    firstInstallmentDate.getFullYear(),
+    firstInstallmentDate.getMonth(),
+    DUE_DAY
+  );
 
-      const pausedMonth = pauseCutoffYM && ym >= pauseCutoffYM; // paused?
-      const skipped = skipSet.has(ym); // skipped?
+  const endOfAsOfMonth = new Date(
+    asOf.getFullYear(),
+    asOf.getMonth() + 1,
+    0,
+    23,
+    59,
+    59,
+    999
+  );
 
-      const expected = pausedMonth || skipped ? 0 : getInstallmentAmountFor(cursor);
-      months.set(ym, { expected, collected: 0 });
+  let expectedAccum = 0;
+  const cursor = new Date(firstDue);
 
-      cursor.setMonth(cursor.getMonth() + 1);
-    }
+  while (cursor <= endOfAsOfMonth) {
+    const ym = ymKey(cursor);
+    const expected = skipSet.has(ym) ? 0 : getInstallmentAmountForDate(cursor);
+
+    if (expectedAccum >= collectibleCap) break;
+    if (expected > 0 && expectedAccum + expected > collectibleCap) break;
+
+    months.set(ym, { expected, collected: 0 });
+    expectedAccum += expected;
+
+    cursor.setMonth(cursor.getMonth() + 1);
   }
 
-  // Payments after initial date only
-  const initialPayDate = client.initialPaymentDate ? new Date(client.initialPaymentDate) : null;
-  const rawPayments = (client.payments || [])
-    .filter((p) => {
-      const d = new Date(p.date);
-      return initialPayDate ? d > initialPayDate : true;
-    })
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .map((p) => ({ amount: Number(p.amount || 0), date: new Date(p.date) }));
+  const initialCutoff = toDateSafe(client.initialPaymentDate);
 
-  // Allocate oldest-first over ALL months from firstDue forward
+  const isInitialFlag = (p) => {
+    const t = (p?.type || p?.category || "").toString().toLowerCase();
+    return p?.isInitial === true || t === "initial" || t === "retainer" || t === "setup";
+  };
+
+  const rawPayments = (client.payments || [])
+    .map((p) => ({ amount: Number(p.amount || 0), date: toDateSafe(p.date), raw: p }))
+    .filter(
+      (p) =>
+        p.amount > 0 &&
+        p.date &&
+        p.date <= endOfAsOfMonth &&
+        !isInitialFlag(p.raw) &&
+        (initialCutoff ? p.date > initialCutoff : true)
+    )
+    .sort((a, b) => a.date - b.date);
+
   const allocKeys = Array.from(months.keys()).sort();
+
   for (const pay of rawPayments) {
     let remaining = pay.amount;
     for (const ym of allocKeys) {
@@ -567,11 +902,12 @@ function allocateClientByDueMonth(client, rangeStart, rangeEnd) {
   return { months };
 }
 
-/* --------- small helpers ---------- */
 function lastPaymentDate(client) {
   const arr = client.payments || [];
   if (!arr.length) return null;
-  const latest = arr.reduce((acc, p) => (new Date(p.date) > new Date(acc.date) ? p : acc));
+  const latest = arr.reduce((acc, p) =>
+    new Date(p.date) > new Date(acc.date) ? p : acc
+  );
   try {
     return new Date(latest.date).toISOString().slice(0, 10);
   } catch {
@@ -584,6 +920,7 @@ function ymKey(d) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   return `${y}-${m}`;
 }
+
 function monthInRange(ym, start, end) {
   const s = ymKey(start);
   const endPlus = new Date(end);
@@ -592,17 +929,19 @@ function monthInRange(ym, start, end) {
   return ym >= s && ym < ePlus;
 }
 
-/* --------- date helpers ---------- */
+function parseYMD(str) {
+  if (!str) return new Date();
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
 function toYMD(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
+
 function startOfMonth(d) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-function startOfQuarter(d) {
-  const q = Math.floor(d.getMonth() / 3) * 3;
-  return new Date(d.getFullYear(), q, 1);
 }

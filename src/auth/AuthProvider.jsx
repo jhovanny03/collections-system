@@ -111,9 +111,10 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   // ADD: acciones auth (las exponemos en el context)
-  const register = useCallback((email, password) => authService.register(email, password), []);
-  const login    = useCallback((email, password) => authService.login(email, password), []);
-  const logout   = useCallback(() => authService.logout(), []);
+  const register     = useCallback((email, password) => authService.register(email, password), []);
+  const login        = useCallback((email, password) => authService.login(email, password), []);
+  const logout       = useCallback(() => authService.logout(), []);
+  const loginWithGoogle = useCallback(() => authService.loginWithGoogle(), []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -183,6 +184,7 @@ export function AuthProvider({ children }) {
       register,
       login,
       logout,
+      loginWithGoogle,
       // helpers
       isMaster: () => isMasterFn(user),
       isAdmin: () => isAdminFn(user),

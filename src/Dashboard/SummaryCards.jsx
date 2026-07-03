@@ -94,6 +94,10 @@ export default function SummaryCards({
     mtdAccountsReceivableCurrentOnly = 0,
 
     ytdOutstandingBalance = 0,
+
+    // ✅ from Dashboard
+    paidInFullCount,
+    paidInFullPercent,
   } = data;
 
   const ordered = [
@@ -113,6 +117,19 @@ export default function SummaryCards({
       color: "rgb(245,158,11)",
       Icon: ReportProblemRounded,
     },
+
+    // ✅ Paid In Full — single line like "1 (25%)"
+    // Use numeric value for the animated count and append the % via valueSuffix
+    {
+      key: "paidInFull",
+      title: "Paid in Full",
+      value: Number(paidInFullCount ?? 0),
+      valueSuffix: ` (${Number(paidInFullPercent ?? 0)}%)`,
+      diff: diffs?.paidInFull,
+      color: "rgb(34,197,94)", // success green
+      Icon: PersonRounded,
+    },
+
     {
       key: "totalOwed",
       title: "Total Owed",
@@ -172,6 +189,7 @@ export default function SummaryCards({
     },
   ];
 
+  // Keep default filtering behavior
   const items = ordered.filter((i) => !omitKeys.includes(i.key));
 
   return (
@@ -193,6 +211,7 @@ export default function SummaryCards({
           <SummaryCard
             title={c.title}
             value={c.value}
+            valueSuffix={c.valueSuffix}
             diff={c.diff}
             iconBg={c.color}
             Icon={c.Icon}

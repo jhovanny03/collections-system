@@ -15,10 +15,12 @@ import {
   InputAdornment,
   Grow,
   GlobalStyles,
+  Divider,
 } from "@mui/material";
 import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import { useAuth } from "../auth/useAuth";
+import GoogleIcon from "@mui/icons-material/Google";
 
 // ✅ Assets
 import loginBg from "../assets/login-bg.png";
@@ -31,8 +33,22 @@ export default function Login() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
+
+  async function handleGoogleLogin() {
+    setError("");
+    setSubmitting(true);
+    try {
+      await loginWithGoogle();
+      navigate("/dashboard", { replace: true });
+    } catch (err) {
+      console.error("Google login error:", err);
+      setError(err.message || "Google sign-in failed. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -156,6 +172,34 @@ export default function Login() {
             </Alert>
           )}
 
+          {/* Google SSO */}
+          <Button
+            fullWidth
+            variant="outlined"
+            startIcon={<GoogleIcon />}
+            onClick={handleGoogleLogin}
+            disabled={submitting}
+            sx={{
+              mb: 2,
+              color: "#fff",
+              borderColor: "rgba(255,255,255,0.35)",
+              textTransform: "none",
+              fontWeight: 600,
+              "&:hover": {
+                borderColor: "#fff",
+                backgroundColor: "rgba(255,255,255,0.08)",
+              },
+            }}
+          >
+            Sign in with Google
+          </Button>
+
+          <Divider sx={{ mb: 2, borderColor: "rgba(255,255,255,0.2)" }}>
+            <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.5)", px: 1 }}>
+              or sign in with email
+            </Typography>
+          </Divider>
+
           <Box component="form" onSubmit={handleSubmit} noValidate autoComplete="off">
             <Stack spacing={2}>
               <TextField
@@ -192,7 +236,7 @@ export default function Login() {
                 type={showPw ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
+                autoComplete="current-password"
                 required
                 fullWidth
                 size="medium"
@@ -236,10 +280,10 @@ export default function Login() {
                 <Link
                   component="button"
                   variant="body2"
-                  onClick={() => navigate("/action?mode=resetPassword")}
+                  onClick={() => navigate("/forgot-password")}
                   sx={{ color: "#fff", opacity: 0.8, textTransform: "none" }}
                 >
-                  Reset password
+                  Forgot password?
                 </Link>
                 <Button
                   type="submit"

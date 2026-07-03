@@ -7,15 +7,14 @@ import { db } from "../firebase";
 import SummaryCards from "./SummaryCards.jsx";
 import OutstandingVsCollected from "./OutstandingVsCollected.jsx";
 import PaymentsLast3Months from "./PaymentsLast3Months.jsx";
-import PastDueLast3Months from "./PastDueLast3Months.jsx";
-import PaymentsVsPastDueLast6Months from "./PaymentsVsPastDueLast6Months.jsx";
-// import PaymentsOverTime from "./PaymentsOverTime.jsx";
+import PastDueLast3Months from "./PastDueLast3Months.jsx"; // keep if you use it elsewhere
+import PaymentsVsPastDueLast6Months from "./PaymentsVsPastDueLast6Months.jsx"; // keep if you use it elsewhere
 import CasesByStatus from "./CasesByStatus.jsx";
-import AmountByCaseType from "./AmountByCaseType.jsx";
+// import AmountByCaseType from "./AmountByCaseType.jsx"; // 🔸 removed from use
 import LastClientToday from "./LastClientToday.jsx";
-import OutstandingVsCollectedMini from "./OutstandingVsCollectedMini.jsx";
-import ExpectedPayments from "./ExpectedPayments.jsx";
-import UpcomingPromisesList from "./UpcomingPromisesList.jsx"; // ✅ restore import
+import OutstandingVsCollectedMini from "./OutstandingVsCollectedMini.jsx"; // keep if you use it elsewhere
+import ExpectedPayments from "./ExpectedPayments.jsx"; // keep if you use it elsewhere
+import UpcomingPromisesList from "./UpcomingPromisesList.jsx";
 
 // ===================== Shared helpers / canonical math =====================
 const DUE_DAY = 15;
@@ -23,175 +22,197 @@ const DUE_DAY = 15;
 const toDate = (v) =>
   v?.toDate?.() ? v.toDate() : isNaN(new Date(v)) ? null : new Date(v);
 
-const clamp0 = (n) => (n > 0 ? n : 0);
-const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+const startOfMonth = (d) =>
+  new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+const endOfMonth = (d) =>
+  new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 const endOfPrevMonth = () =>
-  new Date(new Date().getFullYear(), new Date().getMonth(), 0, 23, 59, 59, 999);
-const addMonths = (d, n) => new Date(d.getFullYear(), d.getMonth() + n, 1, 0, 0, 0, 0);
+  new Date(
+    new Date().getFullYear(),
+    new Date().getMonth(),
+    0,
+    23,
+    59,
+    59,
+    999
+  );
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-const ymIndex = (d) => d.getFullYear() * 12 + d.getMonth();
 
-const monthLabel = (d) =>
-  `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
-
-/** Variable monthly amount via schedule ranges; falls back to installmentAmount or 500 */
-function getMonthlyForMonth(client, monthDate) {
-  const schedule = Array.isArray(client?.installmentSchedule)
-    ? client.installmentSchedule
-    : [];
-
-  const mStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-  const mEnd = endOfMonth(monthDate);
-
-  for (const item of schedule) {
-    const s = toDate(item?.start);
-    const e = toDate(item?.end);
-    const amt = Number(item?.amount || 0);
-    if (!s || !e || !amt) continue;
-    const overlaps = !(e < mStart || s > mEnd);
-    if (overlaps) return amt;
+const getInstallmentAmountForDate = (schedule, date) => {
+  if (!Array.isArray(schedule) || schedule.length === 0) return 500;
+  for (let i = 0; i < schedule.length; i++) {
+    const s = schedule[i];
+    const sStart = new Date(s.start);
+    const sEnd = new Date(s.end);
+    if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
+  return 500;
+};
 
-  const fallback = Number(client?.installmentAmount || 0) || 500;
-  return fallback > 0 ? fallback : 0;
+function computeInvoiceEffective(client) {
+  const base = Number(client?.invoiceTotal || 0);
+  const adjustments = Array.isArray(client?.invoiceAdjustments)
+    ? client.invoiceAdjustments
+    : [];
+  const adjToBalanceTotal = adjustments.reduce((sum, a) => {
+    const applyTo = (a?.applyTo || "balance").toLowerCase();
+    const amt = Number(a?.amount || 0);
+    const dp = Number(a?.downPayment || 0);
+    return applyTo === "balance" ? sum + (amt - dp) : sum;
+  }, 0);
+  return Math.max(0, base + adjToBalanceTotal);
+}
+
+function getCollectibleCap(client) {
+  const invoiceEffective = computeInvoiceEffective(client);
+  const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
+  return Math.max(0, invoiceEffective - initialPayment);
 }
 
 /**
- * Canonical month stream builder from the "anchor"
- * Anchor = expectedAnchor (if set by resume) otherwise firstInstallmentDate
- * Stops at a given cutoffDate (inclusive month check by day)
- * Respects skipMonths
- * Respects pause: if paused, cutoff = day before 15th of pause month if pause day < 15, or the pause month is included if pause day >= 15
+ * Canonical snapshot aligned with ClientList/ReportingSummary:
+ * - Anchor = firstInstallmentDate
+ * - Respects skipMonths
+ * - Excludes initial/retainer from FIFO; only payments strictly AFTER initialPaymentDate
+ * - Applies collectible CAP (invoiceEffective - initialPayment). No accrual beyond CAP.
+ * - Pause rule: paused BEFORE 15th => current month not included; paused ON/AFTER 15th => included
+ * - Closed => 0 due
  */
-function buildPastMonthsUpToCutoff(client, asOf = new Date()) {
-  const skipSet = new Set((client?.skipMonths || []).map(String)); // e.g., "2025-08"
+function computeBillingSnapshot(client, now = new Date()) {
+  const status = (client?.status || "active").toLowerCase();
+  const isClosed = status === "closed";
+  const isPaused = status === "paused";
+  const collectibleCap = getCollectibleCap(client);
 
-  const rawStart =
-    client?.expectedAnchor ? toDate(client.expectedAnchor) : toDate(client?.firstInstallmentDate);
+  const planStart = client?.firstInstallmentDate
+    ? toDate(client.firstInstallmentDate)
+    : null;
 
-  if (!rawStart) return [];
-
-  const firstDue = new Date(rawStart.getFullYear(), rawStart.getMonth(), DUE_DAY);
-
-  // Determine cutoff with pause logic (Option 1)
-  const pauseDate = client?.pauseStartedAt ? toDate(client.pauseStartedAt) : null;
-  let cutoff = new Date(asOf);
-  if (client?.status === "paused" && pauseDate) {
-    const pauseDay = pauseDate.getDate();
-    // If paused before 15 → do NOT include the pause month
-    cutoff =
-      pauseDay < DUE_DAY
-        ? new Date(pauseDate.getFullYear(), pauseDate.getMonth(), DUE_DAY - 1) // day before the 15th of pause month
-        : new Date(pauseDate); // include pause month (>= 15)
+  if (!planStart || isNaN(planStart)) {
+    const isPaidInFull = collectibleCap <= 0 || isClosed;
+    return { amountDue: 0, missedMonths: 0, isPaidInFull };
   }
 
-  // Walk months from firstDue to cutoff (inclusive if cutoff date >= 15, else we stop at previous month)
+  const firstDueDate = new Date(
+    planStart.getFullYear(),
+    planStart.getMonth(),
+    DUE_DAY
+  );
+
+  // ✅ Pause cutoff logic (same behavior as your ReportingSummary)
+  const pauseStartedAt = client?.pauseStartedAt
+    ? toDate(client.pauseStartedAt)
+    : null;
+
+  const cutoff =
+    isPaused && pauseStartedAt
+      ? new Date(
+          pauseStartedAt.getFullYear(),
+          pauseStartedAt.getMonth(),
+          pauseStartedAt.getDate() >= DUE_DAY ? DUE_DAY : DUE_DAY - 1
+        )
+      : now;
+
+  const skipSet = new Set((client?.skipMonths || []).map(String));
+  const monthIsSkipped = (d) => skipSet.has(ymKey(d));
+
+  const schedule = (client?.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  // Build months up to CUTOFF but stop when expected sum would exceed CAP
   const months = [];
-  const lastMonthIndex =
-    cutoff.getDate() >= DUE_DAY
-      ? ymIndex(new Date(cutoff.getFullYear(), cutoff.getMonth(), 1))
-      : ymIndex(new Date(cutoff.getFullYear(), cutoff.getMonth() - 1, 1));
+  const cursor = new Date(firstDueDate);
+  let expectedAccum = 0;
 
-  for (
-    let cur = new Date(firstDue.getFullYear(), firstDue.getMonth(), DUE_DAY);
-    ymIndex(cur) <= lastMonthIndex;
-    cur = addMonths(cur, 1)
-  ) {
-    // Respect skips
-    if (skipSet.has(ymKey(cur))) continue;
-
-    months.push({
-      monthDate: new Date(cur.getFullYear(), cur.getMonth(), 1),
-      expected: getMonthlyForMonth(client, cur),
-      collected: 0,
-    });
-  }
-
-  return months;
-}
-
-/** Apply FIFO payments AFTER initialPaymentDate to a months array (past months only). */
-function applyPaymentsFIFOToMonths(client, months, asOf = new Date()) {
-  if (!months.length) return months;
-
-  // initial-payment cutoff
-  const initialCutoff = client?.initialPaymentDate ? toDate(client.initialPaymentDate) : null;
-
-  const firstStart = new Date(months[0].monthDate.getFullYear(), months[0].monthDate.getMonth(), 1);
-  const lastEnd = endOfMonth(asOf);
-
-  // Filter & order payments (exclude initial/retainer)
-  const isInitialFlag = (p) => {
-    const t = (p?.type || p?.category || "").toString().toLowerCase();
-    return p?.isInitial === true || t === "initial" || t === "retainer" || t === "setup";
-  };
-
-  const pays = (client?.payments || [])
-    .map((p) => ({ amount: Number(p?.amount || 0), date: toDate(p?.date), raw: p }))
-    .filter(
-      (p) =>
-        p.amount > 0 &&
-        p.date &&
-        p.date >= firstStart &&
-        p.date <= lastEnd &&
-        !isInitialFlag(p.raw) &&
-        (initialCutoff ? p.date > initialCutoff : true)
-    )
-    .sort((a, b) => a.date - b.date);
-
-  for (const pay of pays) {
-    let remain = pay.amount;
-    for (let i = 0; i < months.length && remain > 0; i++) {
-      const need = Math.max(0, (months[i].expected || 0) - (months[i].collected || 0));
-      if (need <= 0) continue;
-      const applied = Math.min(need, remain);
-      months[i].collected += applied;
-      remain -= applied;
+  if (!isClosed) {
+    while (cursor <= cutoff) {
+      if (!monthIsSkipped(cursor)) {
+        const amt = getInstallmentAmountForDate(schedule, cursor);
+        if (expectedAccum >= collectibleCap) break;
+        if (expectedAccum + amt > collectibleCap) break;
+        months.push(new Date(cursor));
+        expectedAccum += amt;
+      }
+      cursor.setMonth(cursor.getMonth() + 1);
     }
   }
-  return months;
-}
 
-/** Canonical: compute amount due as of a date (15th rule + pause + skip + schedule + FIFO after initial). */
-function amountDueAsOf(client, asOf = new Date()) {
-  const months = buildPastMonthsUpToCutoff(client, asOf);
-  if (!months.length) return 0;
+  // Payments AFTER initial (strict)
+  const allPayments = client?.payments || [];
+  const initialPaymentDate = client?.initialPaymentDate
+    ? toDate(client.initialPaymentDate)
+    : null;
 
-  const withPayments = applyPaymentsFIFOToMonths(client, months, asOf);
+  const paymentsAfterInitial = initialPaymentDate
+    ? allPayments.filter((p) => toDate(p.date) > initialPaymentDate)
+    : allPayments.slice();
 
-  let due = 0;
-  for (const m of withPayments) {
-    due += Math.max(0, (m.expected || 0) - (m.collected || 0));
+  const pool = paymentsAfterInitial
+    .map((p) => ({ amount: Number(p.amount || 0), date: toDate(p.date) }))
+    .filter((p) => p.amount > 0 && p.date)
+    .sort((a, b) => a.date - b.date);
+
+  let validTotalPaid = 0;
+  const dueMonths = [];
+
+  for (const monthDate of months) {
+    const monthAmt = getInstallmentAmountForDate(schedule, monthDate);
+    let monthPaid = 0;
+
+    for (const p of pool) {
+      if (p.amount <= 0) continue;
+      if (monthPaid >= monthAmt) break;
+      const used = Math.min(monthAmt - monthPaid, p.amount);
+      monthPaid += used;
+      p.amount -= used;
+      validTotalPaid += used;
+    }
+
+    if (monthPaid < monthAmt) {
+      dueMonths.push({ amount: monthAmt });
+    }
   }
-  return due;
+
+  // Roll any leftover forward up to CAP (prepayments)
+  const leftover = pool.reduce((s, p) => s + (p.amount || 0), 0);
+  const capRoom = Math.max(0, collectibleCap - validTotalPaid);
+  if (leftover > 0 && capRoom > 0)
+    validTotalPaid += Math.min(leftover, capRoom);
+
+  const remainingBalance = Math.max(0, collectibleCap - validTotalPaid);
+  const isPaidInFull = remainingBalance <= 0 || isClosed;
+
+  if (isPaidInFull || isClosed) {
+    return { amountDue: 0, missedMonths: 0, isPaidInFull: true };
+  }
+
+  const amountDue = dueMonths.reduce((s, m) => s + (Number(m.amount) || 0), 0);
+  const missedMonths = dueMonths.length;
+
+  return { amountDue, missedMonths, isPaidInFull: false };
 }
 
-/** "Current through last month" = no unpaid balance as of day-before-15th of this month. */
-function isCurrentThroughLastMonth(client, asOf = new Date()) {
-  const cutoff = new Date(asOf.getFullYear(), asOf.getMonth(), DUE_DAY - 1);
-  return amountDueAsOf(client, cutoff) === 0;
-}
+/* ===== Promise + MTD helpers (aligned; CAP-aware where needed) ===== */
 
-/** Promises */
+// Promise amount on/after "today"
 function promisedAmountForClientAsOf(client, asOf = new Date()) {
-  const pp = client?.paymentPromise;
-  if (!pp) return 0;
-  const when = toDate(pp.date);
-  const amt = Number(pp.amount || 0);
+  const p = client?.paymentPromise;
+  if (!p) return 0;
+  const when = toDate(p.date);
+  const amt = Number(p.amount || 0);
   if (!when || !amt) return 0;
-
   const day = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
   return when >= day ? amt : 0;
 }
 
+// Promise expected within given month
 function expectedPaymentsInMonth(client, monthDate = new Date()) {
-  // Promise object is the only “expected” in these cards
-  const pp = client?.paymentPromise;
-  if (!pp) return 0;
-  const when = toDate(pp.date);
-  const amt = Number(pp.amount || 0);
+  const p = client?.paymentPromise;
+  if (!p) return 0;
+  const when = toDate(p.date);
+  const amt = Number(p.amount || 0);
   if (!when || !amt) return 0;
   const start = startOfMonth(monthDate);
   const end = endOfMonth(monthDate);
@@ -199,60 +220,60 @@ function expectedPaymentsInMonth(client, monthDate = new Date()) {
 }
 
 /**
- * Expected vs Collected (MTD) — **FIFO across all months up to this month**.
- * This ensures payments dated this month first cover older unpaid months,
- * and only the portion that reaches the current month is counted as “collected”.
+ * Expected vs Collected (MTD) — CAP-aware.
+ * ✅ OPTION #1 CHANGE:
+ * - If status === "paused", expected/collected for the current month = 0 (always).
+ * - Resume behavior is handled by ClientActions.js by writing skipMonths.
  */
 function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
-  // Closed cases do not contribute
-  if ((client?.status || "").toLowerCase() === "closed") {
-    return { expected: 0, collected: 0 };
-  }
+  const status = (client?.status || "").toLowerCase();
+  if (status === "closed") return { expected: 0, collected: 0 };
 
-  const monthStart = startOfMonth(monthDate);
+  // ✅ Option #1: paused clients do not contribute to expected/collected
+  if (status === "paused") return { expected: 0, collected: 0 };
+
+  const planStart = client?.firstInstallmentDate
+    ? toDate(client.firstInstallmentDate)
+    : null;
+  if (!planStart) return { expected: 0, collected: 0 };
+
+  const collectibleCap = getCollectibleCap(client);
+
   const monthEnd = endOfMonth(monthDate);
   const curKey = ymKey(monthDate);
   const skipSet = new Set((client?.skipMonths || []).map(String));
 
-  // Is the current month billable? (skip + mid-month pause rule)
-  let billableThisMonth = true;
-  if (skipSet.has(curKey)) billableThisMonth = false;
+  // Billable this month?
+  const billableThisMonth = !skipSet.has(curKey);
+  if (!billableThisMonth) return { expected: 0, collected: 0 };
 
-  const paused = client?.status === "paused";
-  const pauseDate = client?.pauseStartedAt ? toDate(client.pauseStartedAt) : null;
-  if (paused && pauseDate) {
-    const sameMonth =
-      pauseDate.getFullYear() === monthDate.getFullYear() &&
-      pauseDate.getMonth() === monthDate.getMonth();
-    if (sameMonth && pauseDate.getDate() < DUE_DAY) {
-      billableThisMonth = false; // paused before 15th → don’t bill current month
-    }
-  }
+  const schedule = (client.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
 
-  // Build timeline from original plan start up to current month
-  const planStart = client?.firstInstallmentDate ? toDate(client.firstInstallmentDate) : null;
-  if (!planStart) return { expected: 0, collected: 0 };
-
-  const firstMonth = new Date(planStart.getFullYear(), planStart.getMonth(), 1);
+  // Build months up to monthEnd with strict CAP gate
   const months = [];
-  const cursor = new Date(firstMonth);
+  let expectedAccum = 0;
+  let cursor = new Date(
+    planStart.getFullYear(),
+    planStart.getMonth(),
+    DUE_DAY
+  );
 
-  while (cursor <= monthStart) {
+  while (cursor <= monthEnd) {
     const key = ymKey(cursor);
-    const isCurrent =
-      cursor.getFullYear() === monthStart.getFullYear() &&
-      cursor.getMonth() === monthStart.getMonth();
+    const amt = skipSet.has(key)
+      ? 0
+      : getInstallmentAmountForDate(schedule, cursor);
 
-    const expected =
-      skipSet.has(key)
-        ? 0
-        : (isCurrent
-            ? (billableThisMonth ? getMonthlyForMonth(client, cursor) : 0)
-            : getMonthlyForMonth(client, cursor));
+    if (expectedAccum >= collectibleCap) break;
+    if (expectedAccum + amt > collectibleCap) break;
+
+    expectedAccum += amt;
 
     months.push({
-      monthDate: new Date(cursor),
-      expected,
+      dueDate: new Date(cursor.getFullYear(), cursor.getMonth(), DUE_DAY),
+      expected: amt,
       collected: 0,
     });
 
@@ -261,15 +282,34 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
 
   if (!months.length) return { expected: 0, collected: 0 };
 
-  // Gather payments up to end of this month, excluding initial/retainer and any on/before initialPaymentDate
-  const initialCutoff = client?.initialPaymentDate ? toDate(client.initialPaymentDate) : null;
+  const currentDueKey = ymKey(
+    new Date(monthDate.getFullYear(), monthDate.getMonth(), DUE_DAY)
+  );
+  const idx = months.findIndex((m) => ymKey(m.dueDate) === currentDueKey);
+  if (idx === -1) return { expected: 0, collected: 0 };
+
+  // FIFO payments up to month end, excluding initial
+  const initialCutoff = client?.initialPaymentDate
+    ? toDate(client.initialPaymentDate)
+    : null;
   const isInitialFlag = (p) => {
-    const t = (p?.type || p?.category || "").toString().toLowerCase();
-    return p?.isInitial === true || t === "initial" || t === "retainer" || t === "setup";
+    const t = (p?.type || p?.category || "")
+      .toString()
+      .toLowerCase();
+    return (
+      p?.isInitial === true ||
+      t === "initial" ||
+      t === "retainer" ||
+      t === "setup"
+    );
   };
 
   const pays = (client?.payments || [])
-    .map((p) => ({ amount: Number(p?.amount || 0), date: toDate(p?.date), raw: p }))
+    .map((p) => ({
+      amount: Number(p?.amount || 0),
+      date: toDate(p?.date),
+      raw: p,
+    }))
     .filter(
       (p) =>
         p.amount > 0 &&
@@ -278,13 +318,15 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
         !isInitialFlag(p.raw) &&
         (initialCutoff ? p.date > initialCutoff : true)
     )
-    .sort((a, b) => a.date - b.date); // FIFO
+    .sort((a, b) => a.date - b.date);
 
-  // Apply FIFO across all months up to current
   for (const pay of pays) {
     let remain = pay.amount;
     for (let i = 0; i < months.length && remain > 0; i++) {
-      const need = Math.max(0, (months[i].expected || 0) - (months[i].collected || 0));
+      const need = Math.max(
+        0,
+        (months[i].expected || 0) - (months[i].collected || 0)
+      );
       if (need <= 0) continue;
       const used = Math.min(need, remain);
       months[i].collected += used;
@@ -292,39 +334,131 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
     }
   }
 
-  const last = months[months.length - 1] || { expected: 0, collected: 0 };
-  const expected = Number(last.expected || 0);
-  const collected = Math.min(expected, Number(last.collected || 0)); // cap
+  const current = months[idx];
+  const expected = Number(current.expected || 0);
+  const collected = Math.min(expected, Number(current.collected || 0));
 
   return { expected, collected };
 }
 
-/** ✅ Correct, non-duplicative YTD outstanding (per-month residuals in current year). */
+/**
+ * ✅✅ YTD outstanding (UPDATED FOR CONSISTENCY)
+ * - Uses same arrears-month cutoff logic (15th rule) for which months count
+ * - BUT applies payments up to `asOf` (today), not just up to the cutoff window
+ * - Also respects pause cutoff (so we don't accrue beyond pause start)
+ */
 function ytdOutstandingForClient(client, asOf = new Date()) {
   const yearStart = new Date(asOf.getFullYear(), 0, 1);
+  const collectibleCap = getCollectibleCap(client);
 
-  // "Last overdue month" (month we consider fully in arrears per 15th rule)
+  const planStart = client?.firstInstallmentDate
+    ? toDate(client.firstInstallmentDate)
+    : null;
+  if (!planStart) return 0;
+
+  const status = (client?.status || "active").toLowerCase();
+  const isPaused = status === "paused";
+  const pauseStartedAt = client?.pauseStartedAt
+    ? toDate(client.pauseStartedAt)
+    : null;
+
+  // ✅ Use the same pause cutoff concept as computeBillingSnapshot
+  const effectiveAsOf =
+    isPaused && pauseStartedAt
+      ? new Date(
+          pauseStartedAt.getFullYear(),
+          pauseStartedAt.getMonth(),
+          pauseStartedAt.getDate() >= DUE_DAY ? DUE_DAY : DUE_DAY - 1
+        )
+      : asOf;
+
+  const schedule = (client.installmentSchedule || [])
+    .slice()
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  const skipSet = new Set((client?.skipMonths || []).map(String));
+  const monthIsSkipped = (d) => skipSet.has(ymKey(d));
+
   const arrearsMonth =
-    asOf.getDate() >= DUE_DAY
-      ? new Date(asOf.getFullYear(), asOf.getMonth(), 1)
-      : new Date(asOf.getFullYear(), asOf.getMonth() - 1, 1);
+    effectiveAsOf.getDate() >= DUE_DAY
+      ? new Date(effectiveAsOf.getFullYear(), effectiveAsOf.getMonth(), 1)
+      : new Date(effectiveAsOf.getFullYear(), effectiveAsOf.getMonth() - 1, 1);
 
-  // Build months up to the 15th of the arrears month, respecting pause/skip/schedule
-  const cutoff = new Date(arrearsMonth.getFullYear(), arrearsMonth.getMonth(), DUE_DAY);
-  const months = buildPastMonthsUpToCutoff(client, cutoff);
+  const firstDue = new Date(
+    planStart.getFullYear(),
+    planStart.getMonth(),
+    DUE_DAY
+  );
+  const cutoff = new Date(
+    arrearsMonth.getFullYear(),
+    arrearsMonth.getMonth(),
+    DUE_DAY
+  );
+
+  // Build expected months up to cutoff (15th rule), CAP-gated
+  const months = [];
+  let cursor = new Date(firstDue);
+  let expectedAccum = 0;
+
+  while (cursor <= cutoff) {
+    if (!monthIsSkipped(cursor)) {
+      const amt = getInstallmentAmountForDate(schedule, cursor);
+
+      if (expectedAccum >= collectibleCap) break;
+      if (expectedAccum + amt > collectibleCap) break;
+
+      months.push({
+        monthDate: new Date(cursor.getFullYear(), cursor.getMonth(), 1),
+        expected: amt,
+        collected: 0,
+      });
+
+      expectedAccum += amt;
+    }
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
   if (!months.length) return 0;
 
-  // Apply payments FIFO once through the cutoff
-  const withPayments = applyPaymentsFIFOToMonths(client, months, cutoff);
+  // ✅ IMPORTANT CONSISTENCY FIX:
+  // Apply payments up to effectiveAsOf (NOT just up to cutoff/month logic)
+  const initialCutoff = client?.initialPaymentDate
+    ? toDate(client.initialPaymentDate)
+    : null;
 
-  // Sum only the months within the current year
+  const pays = (client?.payments || [])
+    .map((p) => ({
+      amount: Number(p?.amount || 0),
+      date: toDate(p?.date),
+    }))
+    .filter(
+      (p) =>
+        p.amount > 0 &&
+        p.date &&
+        p.date <= effectiveAsOf &&
+        (initialCutoff ? p.date > initialCutoff : true)
+    )
+    .sort((a, b) => a.date - b.date);
+
+  for (const pay of pays) {
+    let remain = pay.amount;
+    for (let i = 0; i < months.length && remain > 0; i++) {
+      const need = Math.max(0, months[i].expected - months[i].collected);
+      if (need <= 0) continue;
+      const used = Math.min(remain, need);
+      months[i].collected += used;
+      remain -= used;
+    }
+  }
+
+  // Sum only months within the current year up to arrearsMonth
   let ytd = 0;
-  for (const m of withPayments) {
-    const mMonth = new Date(m.monthDate.getFullYear(), m.monthDate.getMonth(), 1);
-    if (mMonth >= yearStart && mMonth <= arrearsMonth) {
+  for (const m of months) {
+    if (m.monthDate >= yearStart && m.monthDate <= arrearsMonth) {
       ytd += Math.max(0, (m.expected || 0) - (m.collected || 0));
     }
   }
+
   return ytd;
 }
 
@@ -355,117 +489,145 @@ export default function Dashboard() {
 
     const acc = clients.reduce(
       (a, c) => {
-        // 🚫 Ignore closed cases entirely in dashboard totals
-        if ((c?.status || "").toLowerCase() === "closed") return a;
+        const status = (c?.status || "").toLowerCase();
+        const isClosed = status === "closed";
+        if (isClosed) return a;
 
-        // Totals using the canonical function that respects pause/skip/schedule/initial FIFO
-        const dueToday = amountDueAsOf(c, today);
-        const duePrev = amountDueAsOf(c, prev);
+        // Snapshots (cap-aware + pause cutoff)
+        const snapNow = computeBillingSnapshot(c, today);
+        const snapPrev = computeBillingSnapshot(c, prev);
 
-        a.totalOwed += dueToday;
-        a.prev_totalOwed += duePrev;
+        a.totalOwed += snapNow.amountDue;
+        a.prev_totalOwed += snapPrev.amountDue;
 
-        if (dueToday > 0) a.pastDueClients += 1;
-        if (duePrev > 0) a.prev_pastDueClients += 1;
+        if (snapNow.amountDue > 0) a.pastDueClients += 1;
+        if (snapPrev.amountDue > 0) a.prev_pastDueClients += 1;
 
-        // “Active arrangements” here = has a start + some monthly amount configured
-        if (toDate(c?.firstInstallmentDate) && (getMonthlyForMonth(c, today) > 0)) {
-          a.activeArrangements += 1;
-          a.prev_activeArrangements += 1;
-        }
+        if (snapNow.isPaidInFull) a.paidInFullCount += 1;
+        if (snapPrev.isPaidInFull) a.prev_paidInFullCount += 1;
 
+        // Promises
         a.promisedPayments += promisedAmountForClientAsOf(c, today);
         a.prev_promisedPayments += promisedAmountForClientAsOf(c, prev);
 
-        // Promise expected this month
-        a.expectedThisMonth += expectedPaymentsInMonth(c, today);
-        a.prev_expectedThisMonth += expectedPaymentsInMonth(c, prev);
-
-        // Expected vs collected (MTD) with skip/pause applied
-        const { expected, collected } = getClientExpectedCollectedThisMonth(c, today);
+        const { expected, collected } = getClientExpectedCollectedThisMonth(
+          c,
+          today
+        );
         a.mtdExpected += expected;
         a.mtdCollected += collected;
 
-        // Current-only split (clients current through last month)
-        if (isCurrentThroughLastMonth(c, today)) {
+        const wasCurrentThroughLastMonth =
+          computeBillingSnapshot(
+            c,
+            new Date(today.getFullYear(), today.getMonth(), DUE_DAY - 1)
+          ).amountDue === 0;
+
+        if (wasCurrentThroughLastMonth) {
           a.mtdExpectedCurrent += expected;
           a.mtdCollectedCurrent += collected;
         }
 
-        // Previous month snapshot for diffs
-        const { expected: prevExp, collected: prevCol } =
-          getClientExpectedCollectedThisMonth(c, prev);
-        a.prev_mtdExpected += prevExp;
-        a.prev_mtdCollected += prevCol;
+        const prevEC = getClientExpectedCollectedThisMonth(c, prev);
+        a.prev_mtdExpected += prevEC.expected;
+        a.prev_mtdCollected += prevEC.collected;
 
-        // ✅ Correct YTD (no double-counting)
         const ytd = ytdOutstandingForClient(c, today);
         a.ytdOutstanding += ytd;
-        a.prev_ytdOutstanding += ytd; // same base for your diff label
+        a.prev_ytdOutstanding += ytd;
+
+        if (snapNow.amountDue > 2000) a.highBalanceCount += 1;
 
         return a;
       },
       {
         totalOwed: 0,
         pastDueClients: 0,
-        activeArrangements: 0,
+        paidInFullCount: 0,
         promisedPayments: 0,
-        expectedThisMonth: 0,
 
+        // MTD totals
         mtdExpected: 0,
         mtdCollected: 0,
 
-        // current-only accumulators
+        // current-only split
         mtdExpectedCurrent: 0,
         mtdCollectedCurrent: 0,
 
+        // prev month comparators
         prev_totalOwed: 0,
         prev_pastDueClients: 0,
-        prev_activeArrangements: 0,
+        prev_paidInFullCount: 0,
         prev_promisedPayments: 0,
-        prev_expectedThisMonth: 0,
         prev_mtdExpected: 0,
         prev_mtdCollected: 0,
 
+        // YTD
         ytdOutstanding: 0,
         prev_ytdOutstanding: 0,
+
+        // other
+        highBalanceCount: 0,
       }
     );
 
     const totalClients = clients.filter(
       (c) => (c?.status || "").toLowerCase() !== "closed"
     ).length;
-    const roundMoney = (n) => Math.round(n);
+
+    const pastDuePercent =
+      totalClients > 0
+        ? Math.round((acc.pastDueClients / totalClients) * 100)
+        : 0;
+
+    const paidInFullPercent =
+      totalClients > 0
+        ? Math.round((acc.paidInFullCount / totalClients) * 100)
+        : 0;
 
     const mtdAR = Math.max(0, acc.mtdExpected - acc.mtdCollected);
     const prev_mtdAR = Math.max(0, acc.prev_mtdExpected - acc.prev_mtdCollected);
+    const mtdARCurrent = Math.max(
+      0,
+      acc.mtdExpectedCurrent - acc.mtdCollectedCurrent
+    );
 
-    // current-only AR
-    const mtdARCurrent = Math.max(0, acc.mtdExpectedCurrent - acc.mtdCollectedCurrent);
+    const round = (n) => Math.round(n);
 
     return {
       summaryData: {
-        totalOwed: roundMoney(acc.totalOwed),
+        totalOwed: round(acc.totalOwed),
         totalClients,
         pastDueClients: acc.pastDueClients,
-        promisedPayments: roundMoney(acc.promisedPayments),
-        activeArrangements: acc.activeArrangements,
+        promisedPayments: round(acc.promisedPayments),
 
-        // All clients (MTD)
-        expectedPaymentsThisMonth: roundMoney(acc.mtdExpected),
-        mtdAccountsReceivable: roundMoney(mtdAR),
+        expectedPaymentsThisMonth: round(acc.mtdExpected),
+        mtdAccountsReceivable: round(mtdAR),
 
-        // Current-only splits
-        expectedPaymentsThisMonthCurrentOnly: roundMoney(acc.mtdExpectedCurrent),
-        mtdAccountsReceivableCurrentOnly: roundMoney(mtdARCurrent),
+        expectedPaymentsThisMonthCurrentOnly: round(acc.mtdExpectedCurrent),
+        mtdAccountsReceivableCurrentOnly: round(mtdARCurrent),
 
-        ytdOutstandingBalance: roundMoney(acc.ytdOutstanding),
+        ytdOutstandingBalance: round(acc.ytdOutstanding),
 
-        // (optional internal use)
-        _pieExpected: roundMoney(acc.mtdExpected),
-        _pieCollected: roundMoney(acc.mtdCollected),
+        paidInFullCount: acc.paidInFullCount,
+        paidInFullPercent,
+
+        highBalanceCount: acc.highBalanceCount,
       },
       diffs: {
+        totalClients: { value: 0, direction: "up", label: "—" },
+        pastDueClients: {
+          value: pctChange(acc.pastDueClients, acc.prev_pastDueClients),
+          direction:
+            acc.pastDueClients >= acc.prev_pastDueClients ? "up" : "down",
+          label: "Since last month",
+        },
+        paidInFull: {
+          value: pctChange(acc.paidInFullCount, acc.prev_paidInFullCount),
+          direction:
+            acc.paidInFullCount >= acc.prev_paidInFullCount ? "up" : "down",
+          label: "Since last month",
+        },
         totalOwed: {
           value: pctChange(acc.totalOwed, acc.prev_totalOwed),
           direction: acc.totalOwed >= acc.prev_totalOwed ? "up" : "down",
@@ -473,13 +635,8 @@ export default function Dashboard() {
         },
         promisedPayments: {
           value: pctChange(acc.promisedPayments, acc.prev_promisedPayments),
-          direction: acc.promisedPayments >= acc.prev_promisedPayments ? "up" : "down",
-          label: "Since last month",
-        },
-        activeArrangements: {
-          value: pctChange(acc.activeArrangements, acc.prev_activeArrangements),
           direction:
-            acc.activeArrangements >= acc.prev_activeArrangements ? "up" : "down",
+            acc.promisedPayments >= acc.prev_promisedPayments ? "up" : "down",
           label: "Since last month",
         },
         expectedPaymentsThisMonth: {
@@ -494,7 +651,8 @@ export default function Dashboard() {
         },
         ytdOutstandingBalance: {
           value: pctChange(acc.ytdOutstanding, acc.prev_ytdOutstanding),
-          direction: acc.ytdOutstanding >= acc.prev_ytdOutstanding ? "up" : "down",
+          direction:
+            acc.ytdOutstanding >= acc.prev_ytdOutstanding ? "up" : "down",
           label: "Since last month",
         },
       },
@@ -503,12 +661,17 @@ export default function Dashboard() {
 
   return (
     <Container maxWidth={false} sx={{ px: { xs: 2, md: 3 }, py: 3 }}>
-      {/* 1) Summary full width */}
+      {/* Summary row */}
       <Box sx={{ mb: 2 }}>
-        <SummaryCards data={metrics.summaryData} diffs={metrics.diffs} />
+        <SummaryCards
+          data={metrics.summaryData}
+          diffs={metrics.diffs}
+          omitKeys={[]}
+          extraEndSlot={null}
+        />
       </Box>
 
-      {/* 2) Two columns: 3fr / 1fr */}
+      {/* Main layout */}
       <Box
         sx={{
           display: "grid",
@@ -533,9 +696,6 @@ export default function Dashboard() {
 
           <Box sx={{ mt: 2 }}>
             <PaymentsLast3Months height={320} />
-          </Box>
-          <Box sx={{ mt: 2 }}>
-            <AmountByCaseType height={320} />
           </Box>
 
           {/* Optional extra */}
