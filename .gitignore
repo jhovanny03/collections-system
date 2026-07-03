@@ -18,6 +18,10 @@
 .env.test.local
 .env.production.local
 
+# secrets — never commit these
+serviceAccountKey.json
+functions/.env
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
