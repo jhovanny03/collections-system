@@ -9,6 +9,7 @@ import {
 } from "@mui/material";
 import * as XLSX from "xlsx";
 import { buildCohorts } from "./utils/cohortCompute";
+import { computeBillingSnapshot } from "./utils/billingCompute";
 
 const WINDOWS = [30, 60, 90, 120]; // 120+ handled separately
 const DAYS_PER_MONTH = 30.44;
@@ -75,35 +76,17 @@ export default function CohortReport({ clients }) {
     setOpen(true);
   };
 
-  // 🔹 NEW: helper to compute revenue per cohort row
+  // Revenue per cohort row, using the same snapshot as A/R Aging so
+  // "Total Invoiced"/"Total Collected" agree with the rest of the reports.
   function computeRevenueForRow(row) {
     const clientsInCohort = row.clients || [];
     let totalInvoiced = 0;
     let totalCollected = 0;
 
     clientsInCohort.forEach((c) => {
-      // Try multiple possible invoice fields, fall back safely
-      const invoice =
-        c.invoiceTotal ??
-        c.totalInvoice ??
-        (c.billing && c.billing.invoiceTotal) ??
-        0;
-      totalInvoiced += Number(invoice || 0);
-
-      // Collected: prefer a precomputed total if you have it, else sum payments
-      let collected = 0;
-      if (c.totalPaidAfterInstallment != null) {
-        collected = Number(c.totalPaidAfterInstallment || 0);
-      } else if (Array.isArray(c.payments)) {
-        collected = c.payments.reduce(
-          (sum, p) => sum + Number(p.amount || 0),
-          0
-        );
-      } else if (c.totalPaid != null) {
-        collected = Number(c.totalPaid || 0);
-      }
-
-      totalCollected += collected;
+      const snap = computeBillingSnapshot(c, now);
+      totalInvoiced += snap.invoiceEffective;
+      totalCollected += Math.max(0, snap.invoiceEffective - snap.remainingBalance);
     });
 
     const collectionPct =

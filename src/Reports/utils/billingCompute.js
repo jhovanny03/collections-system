@@ -22,6 +22,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
       invoiceBase: 0,
       adjNetToBalance: 0,
       invoiceEffective: 0,
+      oldestUnpaidDueDate: null,
     };
   }
 
@@ -79,6 +80,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
       invoiceBase,
       adjNetToBalance,
       invoiceEffective,
+      oldestUnpaidDueDate: null,
     };
   }
 
@@ -169,6 +171,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   // ---------- allocate payments FIFO into past months ----------
   let validTotalPaid = 0;
   const dueMonths = [];
+  let oldestUnpaidDueDate = null;
 
   for (const monthDate of monthsUpToCutoff) {
     const amountDue = getInstallmentAmountForDate(monthDate);
@@ -186,6 +189,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
 
     if (monthPaid < amountDue) {
       dueMonths.push({ label: labelFor(monthDate), amount: amountDue });
+      if (!oldestUnpaidDueDate) oldestUnpaidDueDate = new Date(monthDate);
     }
   }
 
@@ -230,6 +234,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   // If fully paid, clear due months
   if (remainingBalance <= 0) {
     dueMonths.length = 0;
+    oldestUnpaidDueDate = null;
   }
 
   // ---------- simulate to find next unpaid month (for NextExpected) ----------
@@ -279,6 +284,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
     invoiceBase,
     adjNetToBalance,
     invoiceEffective,
+    oldestUnpaidDueDate,
   };
 }
 

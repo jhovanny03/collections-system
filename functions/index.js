@@ -326,7 +326,12 @@ function computeFollowUpItemForClient(clientDoc, anchorDate) {
   const skipSet = new Set((client.skipMonths || []).map(String));
   const monthIsSkipped = (d) => skipSet.has(ymKey(d));
 
-  // Payments AFTER initial payment date, and <= anchor date
+  // Payments AFTER the initial payment date.
+  // NOTE: We intentionally do NOT cap payments at the anchor date. Billing
+  // Overview counts every payment on the client, so a payment made a few days
+  // after the 15th (e.g. the 17th) still clears that month. Capping at the
+  // anchor (the 16th) previously left clients who paid late permanently flagged
+  // as owing, even after regenerating.
   const allPayments = Array.isArray(client.payments) ? client.payments : [];
   const filteredPays = allPayments
     .map((p) => ({
@@ -338,7 +343,6 @@ function computeFollowUpItemForClient(clientDoc, anchorDate) {
   const paymentsAfterInitial = filteredPays
     .filter((p) => {
       if (initialPaymentDate && p.date <= initialPaymentDate) return false;
-      if (p.date > anchorDate) return false;
       return true;
     })
     .sort((a, b) => a.date - b.date);
