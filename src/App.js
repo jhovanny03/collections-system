@@ -8,55 +8,54 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import {
-  ThemeProvider,
-  createTheme,
-  CssBaseline,
-  Box,
-  GlobalStyles,
-} from "@mui/material";
-import {
-  collection,
-  getDocs,
-  doc,
-  getDoc,
-} from "firebase/firestore";
+import { ThemeProvider, CssBaseline, Box, GlobalStyles, CircularProgress } from "@mui/material";
+import { doc, getDoc } from "firebase/firestore";
 import db from "./firebase";
+import { createAppTheme } from "./theme/brand";
+import { ClientsProvider } from "./data/ClientsProvider";
+import { WorkQueueProvider } from "./data/WorkQueueProvider";
 
-import Sidebar from "./Layout/Sidebar";
 import Layout from "./Layout/Layout";
-import PageTransition from "./Layout/PageTransition";
 
 import ClientList from "./ClientList";
 import CreateClient from "./CreateClient";
 import ClientDashboard from "./ClientDashboard/ClientDashboard";
 import PromisedPaymentCalendar from "./PromisedPaymentCalendar";
 import FollowUps from "./ClientFollowUps/FollowUps.jsx";
-import Dashboard from "./Dashboard/Dashboard";
+import Home from "./Dashboard/Home";
 import UserManagement from "./admin/UserManagement.jsx";
 import ReportsPage from "./Reports/ReportsPage";
-import Level10 from "./Level10/index"; // ✅ ADDED
+import TeamPerformance from "./Team/TeamPerformance";
 
 import Login from "./pages/Login";
-import Register from "./pages/Register";
 import Profile from "./pages/Profile";
+import MyCaseReview from "./pages/MyCaseReview";
+import CaseSetup from "./pages/CaseSetup";
+import { FEATURES } from "./config/features";
 import Welcome from "./pages/Welcome";
 import Onboarding from "./pages/Onboarding";
 import ActionHandler from "./pages/ActionHandler";
-import ForgotPassword from "./pages/ForgotPassword"; // ✅ ADDED
+import ForgotPassword from "./pages/ForgotPassword";
 
 import { AuthProvider } from "./auth/AuthProvider";
 import PrivateRoute from "./auth/PrivateRoute";
 import { useAuth } from "./auth/useAuth";
 import AdminRoute from "./auth/AdminRoute";
 import EditorRoute from "./auth/EditorRoute";
+import LeadRoute from "./auth/LeadRoute";
+
+const MODE_KEY = "color_mode_v1";
 
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <ThemeAndRoutes />
-      </Router>
+      <ClientsProvider>
+        <WorkQueueProvider>
+          <Router>
+            <ThemeAndRoutes />
+          </Router>
+        </WorkQueueProvider>
+      </ClientsProvider>
     </AuthProvider>
   );
 }
@@ -70,9 +69,17 @@ function ThemeAndRoutes() {
   const isStandalonePage = ["/login", "/welcome", "/action", "/forgot-password"].includes(
     location.pathname
   );
+  const inLayout = !isStandalonePage && location.pathname !== "/onboarding";
 
-  const [clients, setClients] = useState([]);
-  const [mode, setMode] = useState("light");
+  const [mode, setMode] = useState(() => {
+    try {
+      return localStorage.getItem(MODE_KEY) === "dark" ? "dark" : "light";
+    } catch {
+      return "light";
+    }
+  });
+  // Onboarding status is read once per signed-in user, not on every page change.
+  const [onboarded, setOnboarded] = useState(null);
 
   useEffect(() => {
     if (user && isLoginPage) {
@@ -81,121 +88,61 @@ function ThemeAndRoutes() {
   }, [user, isLoginPage, navigate]);
 
   useEffect(() => {
-    if (!user) return;
-    (async () => {
-      try {
-        const snap = await getDoc(doc(db, "users", user.uid));
-        const data = snap.exists() ? snap.data() : {};
-        const done = !!data.onboardingCompleted;
-        const onOnboarding = location.pathname === "/onboarding";
-        if (!done && !onOnboarding) navigate("/onboarding", { replace: true });
-      } catch (e) {
+    if (!user) {
+      setOnboarded(null);
+      return;
+    }
+    if (user.onboardingCompleted) {
+      setOnboarded(true);
+      return;
+    }
+    getDoc(doc(db, "users", user.uid))
+      .then((snap) => setOnboarded(!!(snap.exists() && snap.data().onboardingCompleted)))
+      .catch((e) => {
         console.warn("Onboarding check failed:", e.message);
-      }
-    })();
-  }, [user, location.pathname, navigate]);
-
-  useEffect(() => {
-    if (!user) return;
-    const fetchClients = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, "clients"));
-        const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        setClients(data);
-      } catch (error) {
-        console.error("Error fetch clients:", error);
-      }
-    };
-    fetchClients();
+        setOnboarded(true);
+      });
   }, [user]);
 
-  const theme = useMemo(
-    () =>
-      createTheme({
-        palette: {
-          mode,
-          primary: { main: "#0b3a75" },
-          secondary: { main: "#00a693" },
-          error: { main: "#d44500" },
-          background: {
-            default: mode === "light" ? "#f6f8fa" : "#0f1621",
-            paper: mode === "light" ? "#ffffff" : "#1a2332",
-          },
-          text: {
-            primary: mode === "light" ? "#1a1a1a" : "#eaeff4",
-            secondary: mode === "light" ? "#4b5563" : "#cfd6e3",
-          },
-        },
-        shape: { borderRadius: 14 },
-        typography: {
-          fontFamily: "'Poppins','Roboto','Arial',sans-serif",
-          h4: { fontWeight: 600 },
-          button: { textTransform: "none", fontWeight: 600 },
-        },
-        components: {
-          MuiButton: {
-            styleOverrides: {
-              root: { borderRadius: 10, fontWeight: 600 },
-              containedPrimary: {
-                backgroundColor: "#00a693",
-                "&:hover": { backgroundColor: "#00877c" },
-              },
-              containedSecondary: {
-                backgroundColor: "#0b3a75",
-                "&:hover": { backgroundColor: "#052958" },
-              },
-            },
-          },
-        },
-      }),
-    [mode]
+  useEffect(() => {
+    if (onboarded === false && location.pathname !== "/onboarding") navigate("/onboarding", { replace: true });
+  }, [onboarded, location.pathname, navigate]);
+
+  const theme = useMemo(() => createAppTheme(mode), [mode]);
+
+  const toggleColorMode = () =>
+    setMode((prev) => {
+      const next = prev === "light" ? "dark" : "light";
+      try {
+        localStorage.setItem(MODE_KEY, next);
+      } catch {}
+      return next;
+    });
+
+  // Sign-in screens and the loading spinner get the brand theme too.
+  const branded = (node) => (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      {node}
+    </ThemeProvider>
+  );
+  const spinner = (
+    <Box sx={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <CircularProgress />
+    </Box>
   );
 
-  const toggleColorMode = () => setMode((prev) => (prev === "light" ? "dark" : "light"));
-
   if (isLoginPage) {
-    if (authLoading)
-      return (
-        <Box
-          sx={{
-            height: "100vh",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          Loading…
-        </Box>
-      );
+    if (authLoading) return branded(spinner);
     if (user) return <Navigate to="/dashboard" replace />;
-    return (
-      <Box
-        sx={{
-          width: "100vw",
-          height: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
+    return branded(
+      <Box sx={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Login />
       </Box>
     );
   }
 
-  if (authLoading)
-    return (
-      <Box
-        sx={{
-          height: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        Loading…
-      </Box>
-    );
+  if (authLoading) return branded(spinner);
 
   return (
     <ThemeProvider theme={theme}>
@@ -205,11 +152,15 @@ function ThemeAndRoutes() {
           ".fc .fc-timegrid-slot:hover": { backgroundColor: theme.palette.action.hover },
         }}
       />
+      {/* Signed-in pages get their sidebar, header and padding from <Layout>. A second
+          sidebar here used to sit under Layout's, taking 240px (plus padding) of width
+          from every page. Only pages outside Layout get padding here. */}
       <Box sx={{ display: "flex" }}>
-        {!isStandalonePage && <Sidebar />}
-        <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
-          <PageTransition>
-            <Routes>
+        <Box
+          component={inLayout ? "div" : "main"}
+          sx={{ flexGrow: 1, minWidth: 0, p: inLayout ? 0 : 3 }}
+        >
+          <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/welcome" element={<Welcome />} />
               <Route path="/action" element={<ActionHandler />} />
@@ -228,18 +179,23 @@ function ThemeAndRoutes() {
                 path="/*"
                 element={
                   <PrivateRoute>
-                    <Layout mode={mode} toggleColorMode={toggleColorMode} clients={clients}>
+                    <Layout mode={mode} toggleColorMode={toggleColorMode}>
                       <Routes>
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                        <Route path="/dashboard" element={<Dashboard />} />
-                        <Route path="/clients" element={<ClientList clients={clients} />} />
+                        <Route path="/dashboard" element={<Home />} />
+                        <Route path="/clients" element={<ClientList />} />
                         <Route path="/client/:clientId" element={<ClientDashboard />} />
                         <Route
                           path="/create-client"
                           element={
-                            <EditorRoute>
-                              <CreateClient />
-                            </EditorRoute>
+                            FEATURES.createClient ? (
+                              <EditorRoute>
+                                <CreateClient />
+                              </EditorRoute>
+                            ) : (
+                              // In the MyCase rebuild, new clients come from Case Setup.
+                              <Navigate to="/case-setup" replace />
+                            )
                           }
                         />
                         <Route
@@ -258,13 +214,29 @@ function ThemeAndRoutes() {
                             </EditorRoute>
                           }
                         />
+                        <Route
+                          path="/case-setup"
+                          element={
+                            <EditorRoute>
+                              <CaseSetup />
+                            </EditorRoute>
+                          }
+                        />
+                        <Route
+                          path="/mycase-review"
+                          element={
+                            <EditorRoute>
+                              <MyCaseReview />
+                            </EditorRoute>
+                          }
+                        />
                         <Route path="/profile" element={<Profile />} />
                         <Route
                           path="/register"
                           element={
-                            <AdminRoute>
-                              <Register />
-                            </AdminRoute>
+                            // The old Register page signed the admin out; adding people now
+                            // happens on Users & roles (server creates the account).
+                            <Navigate to="/admin/users?invite=1" replace />
                           }
                         />
                         <Route
@@ -276,9 +248,16 @@ function ThemeAndRoutes() {
                           }
                         />
 
-                        {/* Reports + Level10 */}
                         <Route path="/reports" element={<ReportsPage />} />
-                        <Route path="/level10" element={<Level10 />} /> {/* ✅ ADDED */}
+                        <Route path="/level10" element={<Navigate to="/reports" replace />} />
+                        <Route
+                          path="/team"
+                          element={
+                            <LeadRoute>
+                              <TeamPerformance />
+                            </LeadRoute>
+                          }
+                        />
 
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                       </Routes>
@@ -287,7 +266,6 @@ function ThemeAndRoutes() {
                 }
               />
             </Routes>
-          </PageTransition>
         </Box>
       </Box>
     </ThemeProvider>

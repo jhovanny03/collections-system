@@ -1,3 +1,4 @@
+import { asDate } from "./utils/dates";
 import React, { useEffect, useState, useMemo } from "react";
 import {
   Container,
@@ -77,7 +78,7 @@ function PromisedPaymentCalendar() {
   };
   
   const today = new Date();
-  const todayStart = new Date(today);
+  const todayStart = asDate(today);
   todayStart.setHours(0,0,0,0);
 
   const thisMonth = today.getMonth();
@@ -99,9 +100,9 @@ const isTodayPromise = (dateStr) => {
  /* const summary = clients.reduce(
     (acc, client) => {
       const promise = client.paymentPromise;
-      if (!promise?.date || isNaN(new Date(promise.date))) return acc;
+      if (!promise?.date || isNaN(asDate(promise.date))) return acc;
 
-      const date = new Date(promise.date);
+      const date = asDate(promise.date);
       const isSameDay = date.toDateString() === today.toDateString();
 
       if (date.getMonth() === thisMonth && date.getFullYear() === thisYear) {
@@ -204,7 +205,7 @@ const summary = useMemo(() => {
         }}
       >
         <Typography variant="h4" fontWeight={600}>
-          🗓️ Promised Payment Calendar
+          Promised Payment Calendar
         </Typography>
         <Typography variant="subtitle1" mt={1} sx={{ opacity: 0.9 }}>
           Track upcoming, missed, and completed payment promises
@@ -214,13 +215,13 @@ const summary = useMemo(() => {
       <Grid container spacing={2} sx={{ mb: 3 }}>
         {[
           {
-            label: "💰 Total Promised",
+            label: "Total Promised",
             value: `$${summary.totalThisMonth.toLocaleString()}`,
             color: "#4e54c8",
           },
-          { label: "🔴 Missed", value: summary.missed, color: "#dc3545" },
-          { label: "🟢 Upcoming", value: summary.upcoming, color: "#28a745" },
-          { label: "📅 Today", value: summary.today, color: "#6c63ff" },
+          { label: "Missed", value: summary.missed, color: "#dc3545" },
+          { label: "Upcoming", value: summary.upcoming, color: "#28a745" },
+          { label: "Today", value: summary.today, color: "#6c63ff" },
         ].map((card, idx) => (
           <Grid item xs={6} sm={3} key={idx}>
             <Paper
@@ -291,7 +292,7 @@ const summary = useMemo(() => {
           }}
         >
           <Typography variant="h6" gutterBottom paddingBottom={2} paddingTop={1}>
-            📝 Promised Payments
+            Promised Payments
           </Typography>
           <TableContainer>
             <Table size="small">
@@ -307,13 +308,13 @@ const summary = useMemo(() => {
               </TableHead>
               <TableBody>
                 {clientsInActiveMonth.map((client) => {
-                    // ✅ Usamos SIEMPRE los mismos helpers para que haya un solo criterio
+                    // Usamos SIEMPRE los mismos helpers para que haya un solo criterio
                     const { date: dateStr, amount, notes } = client.paymentPromise;
 
                     // Normalizamos una sola vez
-                    const isTodayRow   = isTodayPromise(dateStr);   // 🟠 hoy
-                    const isMissedRow  = isMissed(dateStr);         // 🔴 pasado
-                    const isUpcomingRow = !isTodayRow && !isMissedRow; // 🟢 futuro
+                    const isTodayRow   = isTodayPromise(dateStr);   // hoy
+                    const isMissedRow  = isMissed(dateStr);         // pasado
+                    const isUpcomingRow = !isTodayRow && !isMissedRow; // futuro
 
                     return (
                       <TableRow key={client.id}>
@@ -333,7 +334,7 @@ const summary = useMemo(() => {
                           {notes || "—"}
                         </TableCell>
 
-                        {/* ✅ Chip con estado consistente */}
+                        {/* Chip con estado consistente */}
                         <TableCell>
                           <Chip
                             label={
@@ -453,7 +454,7 @@ const summary = useMemo(() => {
           {promisesOnDate.length > 0 ? (
             <>
               <Typography variant="h6" gutterBottom>
-                💵 Promises on {selectedDate.toDateString()}
+                Promises on {selectedDate.toDateString()}
               </Typography>
               <List>
                 {promisesOnDate.map((client) => {
@@ -492,11 +493,11 @@ const summary = useMemo(() => {
                         {client.firstName} {client.lastName}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        💵 ${parseFloat(client.paymentPromise.amount).toLocaleString()}
+                        ${parseFloat(client.paymentPromise.amount).toLocaleString()}
                       </Typography>
                       {client.paymentPromise.notes && (
                         <Typography variant="body2" sx={{ mt: 0.5 }}>
-                          📝 {client.paymentPromise.notes}
+                          {client.paymentPromise.notes}
                         </Typography>
                       )}
                     </Box>
@@ -538,22 +539,22 @@ const summary = useMemo(() => {
         {selectedPromise && (
           <>
             <DialogTitle sx={{ fontWeight: 700, pb: 0 }}>
-              🔍 {selectedPromise.firstName} {selectedPromise.lastName}
+              {selectedPromise.firstName} {selectedPromise.lastName}
             </DialogTitle>
             <DialogContent sx={{ pt: 1 }}>
               <Box sx={{ mb: 1 }}>
                 <Typography variant="body1" gutterBottom>
-                  💵 <strong>Amount:</strong> $
+                  <strong>Amount:</strong> $
                   {parseFloat(
                     selectedPromise.paymentPromise.amount
                   ).toLocaleString()}
                 </Typography>
                 <Typography variant="body1" gutterBottom>
-                  📅 <strong>Date:</strong>{" "}
+                  <strong>Date:</strong>{" "}
                   {parseISO(selectedPromise.paymentPromise.date).toDateString()}
                 </Typography>
                 <Typography variant="body1" gutterBottom>
-                  📝 <strong>Notes:</strong>{" "}
+                  <strong>Notes:</strong>{" "}
                   {selectedPromise.paymentPromise.notes || "None"}
                 </Typography>
               </Box>

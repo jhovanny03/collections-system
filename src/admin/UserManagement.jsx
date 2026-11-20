@@ -1,446 +1,280 @@
 // src/admin/UserManagement.jsx
-import React, { useEffect, useState } from "react";
+// Users & roles (admins): add people, set what they can do, disable or remove access.
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  Box,
-  Card,
-  CardHeader,
-  CardContent,
-  Table,
-  TableHead,
-  TableRow,
-  TableCell,
-  TableBody,
-  IconButton,
-  Button,
-  Stack,
-  Chip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  MenuItem,
-  Snackbar,
-  Alert,
-  Tooltip,
+  Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment,
+  MenuItem, Snackbar, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
-import EditIcon from "@mui/icons-material/Edit";
-import DeleteIcon from "@mui/icons-material/Delete";
-import LockResetIcon from "@mui/icons-material/LockReset";
-import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";
-import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
-
+import EditRounded from "@mui/icons-material/EditRounded";
+import DeleteOutlineRounded from "@mui/icons-material/DeleteOutlineRounded";
+import LockResetRounded from "@mui/icons-material/LockResetRounded";
+import BlockRounded from "@mui/icons-material/BlockRounded";
+import CheckCircleOutlineRounded from "@mui/icons-material/CheckCircleOutlineRounded";
+import PersonAddAlt1Rounded from "@mui/icons-material/PersonAddAlt1Rounded";
+import ContentCopyRounded from "@mui/icons-material/ContentCopyRounded";
+import { useSearchParams } from "react-router-dom";
 import { collection, getDocs, doc, updateDoc } from "firebase/firestore";
-import db from "../firebase";
-
-// Optional services
-import { authService } from "../services/authService";
-import { userService } from "../services/userService";
-
-// ✅ Singletons from firebase.js
-import { auth } from "../firebase";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { sendPasswordResetEmail } from "firebase/auth";
+import db, { app, auth } from "../firebase";
+import { useAuth } from "../auth/useAuth";
+import { ROLE_LABELS, ROLE_HELP, roleOf, BYPASS_EMAIL } from "../auth/permissions";
+import { PageHeader, Section } from "../ui/kit";
+import { parseDate } from "../utils/dates";
 
-const ROLE_OPTIONS = ["admin", "editor", "basic"];
-
-// 🌐 Your HTTP Function endpoints
-const INVITE_ENDPOINT =
-  "https://us-central1-collectionsapp-7d351.cloudfunctions.net/inviteUserHttp";
-const DELETE_ENDPOINT =
-  "https://us-central1-collectionsapp-7d351.cloudfunctions.net/deleteUserHttp";
-
-function fmt(d) {
-  if (!d) return "—";
-  try {
-    const date = d?.toDate ? d.toDate() : new Date(d);
-    return isNaN(date) ? "—" : date.toLocaleString();
-  } catch {
-    return "—";
-  }
-}
+const ROLE_OPTIONS = ["basic", "editor", "lead", "admin"];
+const ROLE_COLOR = { basic: "default", editor: "primary", lead: "success", admin: "secondary", master: "secondary" };
+const nameOf = (u) => [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || "";
 
 export default function UserManagement() {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { user: me } = useAuth();
+  const [params, setParams] = useSearchParams();
+  const [rows, setRows] = useState(null);
+  const [edit, setEdit] = useState(null);
+  const [invite, setInvite] = useState(params.get("invite") ? { name: "", email: "", role: "editor" } : null);
+  const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState(null);
+  const [toast, setToast] = useState(null);
+  const call = (name, data) => httpsCallable(getFunctions(app), name)(data);
 
-  const [editOpen, setEditOpen] = useState(false);
-  const [editRow, setEditRow] = useState(null);
-
-  const [toast, setToast] = useState({ open: false, type: "success", msg: "" });
-
-  // Invite dialog state
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteName, setInviteName] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("basic");
-  const [inviting, setInviting] = useState(false);
-
-  // Load users
   useEffect(() => {
-    (async () => {
-      try {
-        const snap = await getDocs(collection(db, "users"));
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setRows(list);
-      } catch (e) {
+    getDocs(collection(db, "users"))
+      .then((snap) => setRows(snap.docs.map((d) => ({ id: d.id, ...d.data() }))))
+      .catch((e) => {
         console.error(e);
-        setToast({ open: true, type: "error", msg: "Error loading users" });
-      } finally {
-        setLoading(false);
-      }
-    })();
+        setRows([]);
+        setToast({ type: "error", msg: "Could not load users." });
+      });
   }, []);
 
-  const openEdit = (row) => {
-    setEditRow({
-      id: row.id,
-      name: row.name || "",
-      email: row.email || "",
-      role: row.role || "basic",
-      disabled: !!row.disabled,
-    });
-    setEditOpen(true);
-  };
+  const sorted = useMemo(() => (rows || []).slice().sort((a, b) => ROLE_OPTIONS.indexOf(roleOf(b)) - ROLE_OPTIONS.indexOf(roleOf(a)) || nameOf(a).localeCompare(nameOf(b))), [rows]);
+  const isOwner = (r) => String(r.email || "").toLowerCase() === BYPASS_EMAIL;
 
-  const handleSave = async () => {
-    if (!editRow) return;
+  const saveEdit = async () => {
+    const [firstName, ...rest] = edit.name.trim().split(" ");
+    const patch = { name: edit.name.trim(), firstName: firstName || "", lastName: rest.join(" "), role: edit.role, updatedAt: new Date().toISOString() };
     try {
-      await updateDoc(doc(db, "users", editRow.id), {
-        name: editRow.name,
-        email: editRow.email,
-        role: editRow.role,
-        disabled: !!editRow.disabled,
-        updatedAt: new Date().toISOString(),
-      });
-
-      setRows((prev) =>
-        prev.map((r) => (r.id === editRow.id ? { ...r, ...editRow } : r))
-      );
-      setToast({ open: true, type: "success", msg: "User updated" });
-      setEditOpen(false);
+      await updateDoc(doc(db, "users", edit.id), patch);
+      setRows((p) => p.map((r) => (r.id === edit.id ? { ...r, ...patch } : r)));
+      setEdit(null);
+      setToast({ type: "success", msg: "Saved. The change applies the next time they open the app." });
     } catch (e) {
-      console.error(e);
-      setToast({ open: true, type: "error", msg: "Update failed" });
+      setToast({ type: "error", msg: e.message || "Could not save." });
     }
   };
 
-  const handleResetPassword = async (email) => {
+  const toggleDisabled = async (r) => {
+    const disabled = !r.disabled;
+    if (disabled && !window.confirm(`Turn off access for ${nameOf(r) || r.email}? They will be signed out and cannot sign in until you turn it back on.`)) return;
+    await updateDoc(doc(db, "users", r.id), { disabled });
+    setRows((p) => p.map((x) => (x.id === r.id ? { ...x, disabled } : x)));
+    setToast({ type: "success", msg: disabled ? "Access turned off." : "Access turned back on." });
+  };
+
+  const resetPassword = async (r) => {
     try {
-      if (authService?.sendPasswordReset) {
-        await authService.sendPasswordReset(email);
-      } else {
-        await sendPasswordResetEmail(auth, email);
-      }
-      setToast({ open: true, type: "success", msg: "Reset email sent" });
+      await sendPasswordResetEmail(auth, r.email);
+      setToast({ type: "success", msg: `Password reset email sent to ${r.email}.` });
     } catch (e) {
-      console.error(e);
-      setToast({ open: true, type: "error", msg: "Failed to send reset email" });
+      setToast({ type: "error", msg: e.message || "Could not send the email." });
     }
   };
 
-  const handleToggleDisabled = async (row) => {
+  const sendInvite = async () => {
+    if (!/\S+@\S+\.\S+/.test(invite.email)) return setToast({ type: "error", msg: "Enter a valid email." });
+    setBusy(true);
     try {
-      const newVal = !row.disabled;
-      await updateDoc(doc(db, "users", row.id), { disabled: newVal });
-      setRows((prev) =>
-        prev.map((r) => (r.id === row.id ? { ...r, disabled: newVal } : r))
-      );
-      setToast({
-        open: true,
-        type: "success",
-        msg: newVal ? "User disabled" : "User enabled",
-      });
+      const { data } = await call("inviteUser", { name: invite.name, email: invite.email, role: invite.role });
+      setRows((p) => [...p, { id: data.uid, name: invite.name, email: invite.email.toLowerCase(), role: invite.role, disabled: false, createdAt: new Date() }]);
+      setLink({ email: invite.email, url: data.setPasswordLink });
+      setInvite(null);
+      if (params.get("invite")) setParams({}, { replace: true });
     } catch (e) {
-      console.error(e);
-      setToast({ open: true, type: "error", msg: "Operation failed" });
-    }
-  };
-
-  const handleDelete = async (row) => {
-    if (!window.confirm(`Delete ${row.name || row.email}?`)) return;
-    try {
-      if (!auth.currentUser) {
-        setToast({ open: true, type: "error", msg: "You must be signed in." });
-        return;
-      }
-      // Refresh token so server sees latest claims
-      const idToken = await auth.currentUser.getIdToken(true);
-
-      // 🔁 Call backend to delete from Auth + Firestore
-      const resp = await fetch(DELETE_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ uid: row.id }),
-      });
-
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${resp.status}`);
-      }
-
-      // Update UI
-      setRows((prev) => prev.filter((r) => r.id !== row.id));
-      setToast({ open: true, type: "success", msg: "User deleted" });
-    } catch (e) {
-      console.error(e);
-      const msg =
-        e?.message?.includes("Admins only") ? "Only admins can delete users"
-        : e?.message || "Delete failed";
-      setToast({ open: true, type: "error", msg });
-    }
-  };
-
-  const handleInvite = async () => {
-    if (!inviteEmail || !/\S+@\S+\.\S+/.test(inviteEmail)) {
-      setToast({ open: true, type: "error", msg: "Enter a valid email" });
-      return;
-    }
-    try {
-      setInviting(true);
-
-      if (!auth.currentUser) {
-        setToast({ open: true, type: "error", msg: "You must be signed in." });
-        setInviting(false);
-        return;
-      }
-
-      // Fresh token so server sees latest claims (role=admin)
-      const idToken = await auth.currentUser.getIdToken(true);
-
-      const resp = await fetch(INVITE_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          email: inviteEmail.trim().toLowerCase(),
-          displayName: inviteName.trim(),
-          role: inviteRole,
-        }),
-      });
-
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${resp.status}`);
-      }
-
-      const data = await resp.json(); // { uid, resetLink, verifyLink }
-
-      setToast({ open: true, type: "success", msg: "Invite created. Email links generated." });
-
-      // Optimistic UI
-      setRows((prev) => [
-        ...prev,
-        {
-          id: data.uid,
-          name: inviteName.trim(),
-          email: inviteEmail.trim().toLowerCase(),
-          role: inviteRole,
-          disabled: false,
-          createdAt: new Date(),
-        },
-      ]);
-
-      // reset dialog
-      setInviteName("");
-      setInviteEmail("");
-      setInviteRole("basic");
-      setInviteOpen(false);
-
-      console.log("Invite links:", data);
-    } catch (e) {
-      console.error(e);
-      const msg =
-        e?.message?.includes("Admins only") ? "Only admins can invite users"
-        : e?.message?.includes("already exists") ? "A user with this email already exists"
-        : e?.message || "Invite failed";
-      setToast({ open: true, type: "error", msg });
+      setToast({ type: "error", msg: e.message || "Could not add the user." });
     } finally {
-      setInviting(false);
+      setBusy(false);
+    }
+  };
+
+  const remove = async (r) => {
+    if (!window.confirm(`Permanently delete ${nameOf(r) || r.email}'s account? This cannot be undone. (To pause access instead, use "Turn off access".)`)) return;
+    try {
+      await call("deleteUser", { uid: r.id });
+      setRows((p) => p.filter((x) => x.id !== r.id));
+      setToast({ type: "success", msg: "Account deleted." });
+    } catch (e) {
+      setToast({ type: "error", msg: e.message || "Could not delete." });
     }
   };
 
   return (
-    <Card elevation={0} sx={{ borderRadius: 2, border: "1px solid", borderColor: "divider" }}>
-      <CardHeader
-        title="Employee Management"
-        subheader="View, invite, and edit users"
-        action={
-          <Button
-            variant="contained"
-            startIcon={<PersonAddAlt1Icon />}
-            onClick={() => setInviteOpen(true)}
-          >
-            Invite Employee
+    <Box>
+      <PageHeader
+        title="Users & roles"
+        subtitle="Who can use the app and what each person can do."
+        actions={
+          <Button variant="contained" startIcon={<PersonAddAlt1Rounded />} onClick={() => setInvite({ name: "", email: "", role: "editor" })}>
+            Add a person
           </Button>
         }
       />
-      <CardContent>
-        {loading ? (
-          "Loading users…"
-        ) : (
-          <Box sx={{ width: "100%", overflowX: "auto" }}>
+
+      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "3fr 1fr" } }}>
+        <Section title="People" pad={false}>
+          <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell><strong>Name</strong></TableCell>
-                  <TableCell><strong>Email</strong></TableCell>
-                  <TableCell><strong>Role</strong></TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>Created</TableCell>
-                  <TableCell align="right"><strong>Actions</strong></TableCell>
+                  <TableCell>Person</TableCell>
+                  <TableCell>Role</TableCell>
+                  <TableCell>Access</TableCell>
+                  <TableCell>Added</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.id} hover>
-                    <TableCell>{r.name || "—"}</TableCell>
-                    <TableCell>{r.email || "—"}</TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        label={r.role || "basic"}
-                        color={r.role === "admin" ? "primary" : r.role === "editor" ? "secondary" : "default"}
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        label={r.disabled ? "Disabled" : "Active"}
-                        color={r.disabled ? "warning" : "success"}
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell>{fmt(r.createdAt)}</TableCell>
-                    <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                      <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => openEdit(r)}>
-                          <EditIcon fontSize="inherit" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Reset password">
-                        <IconButton size="small" onClick={() => handleResetPassword(r.email)}>
-                          <LockResetIcon fontSize="inherit" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title={r.disabled ? "Enable" : "Disable"}>
-                        <IconButton size="small" onClick={() => handleToggleDisabled(r)}>
-                          <PowerSettingsNewIcon fontSize="inherit" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Delete">
-                        <IconButton
-                          size="small"
-                          sx={{ color: "error.main" }}
-                          onClick={() => handleDelete(r)}
-                        >
-                          <DeleteIcon fontSize="inherit" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {rows.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={6} align="center">No users</TableCell>
-                  </TableRow>
+                {rows === null && (
+                  <TableRow><TableCell colSpan={5}>Loading…</TableCell></TableRow>
                 )}
+                {sorted.map((r) => {
+                  const role = roleOf(r);
+                  const self = r.id === me?.uid;
+                  return (
+                    <TableRow key={r.id} hover sx={{ opacity: r.disabled ? 0.55 : 1 }}>
+                      <TableCell>
+                        <Stack direction="row" spacing={1.25} alignItems="center">
+                          <Avatar src={r.profileImageURL} sx={{ width: 32, height: 32, fontSize: 13, bgcolor: "primary.main" }}>{(nameOf(r) || r.email || "?").slice(0, 1).toUpperCase()}</Avatar>
+                          <Box>
+                            <Typography fontWeight={700} fontSize={14}>{nameOf(r) || "(no name yet)"}{self ? " (you)" : ""}</Typography>
+                            <Typography variant="caption" color="text.secondary">{r.email}</Typography>
+                          </Box>
+                        </Stack>
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip title={ROLE_HELP[role]}>
+                          <Chip size="small" label={ROLE_LABELS[role]} color={ROLE_COLOR[role]} variant={role === "basic" ? "outlined" : "filled"} />
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell>
+                        <Chip size="small" variant="outlined" label={r.disabled ? "Turned off" : "Active"} color={r.disabled ? "warning" : "success"} />
+                      </TableCell>
+                      <TableCell>{parseDate(r.createdAt)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) || "—"}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                        <Tooltip title="Edit name and role">
+                          <span>
+                            <IconButton size="small" disabled={isOwner(r)} onClick={() => setEdit({ id: r.id, name: nameOf(r), role: role === "master" ? "admin" : role })}>
+                              <EditRounded fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="Email a password reset link">
+                          <IconButton size="small" onClick={() => resetPassword(r)}>
+                            <LockResetRounded fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title={r.disabled ? "Turn access back on" : "Turn off access"}>
+                          <span>
+                            <IconButton size="small" disabled={self || isOwner(r)} onClick={() => toggleDisabled(r)}>
+                              {r.disabled ? <CheckCircleOutlineRounded fontSize="small" /> : <BlockRounded fontSize="small" />}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="Delete account">
+                          <span>
+                            <IconButton size="small" color="error" disabled={self || isOwner(r)} onClick={() => remove(r)}>
+                              <DeleteOutlineRounded fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
-          </Box>
-        )}
-      </CardContent>
+          </TableContainer>
+        </Section>
 
-      {/* Edit dialog */}
-      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Edit employee</DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField
-              label="Name"
-              value={editRow?.name || ""}
-              onChange={(e) => setEditRow((s) => ({ ...s, name: e.target.value }))}
-              fullWidth
-            />
-            <TextField
-              label="Email"
-              value={editRow?.email || ""}
-              onChange={(e) => setEditRow((s) => ({ ...s, email: e.target.value }))}
-              fullWidth
-            />
-            <TextField
-              select
-              label="Role"
-              value={editRow?.role || "basic"}
-              onChange={(e) => setEditRow((s) => ({ ...s, role: e.target.value }))}
-              fullWidth
-            >
-              {ROLE_OPTIONS.map((r) => (
-                <MenuItem key={r} value={r}>{r}</MenuItem>
-              ))}
-            </TextField>
+        <Section title="What each role can do">
+          <Stack spacing={1.5}>
+            {ROLE_OPTIONS.map((r) => (
+              <Box key={r}>
+                <Chip size="small" label={ROLE_LABELS[r]} color={ROLE_COLOR[r]} variant={r === "basic" ? "outlined" : "filled"} />
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{ROLE_HELP[r]}</Typography>
+              </Box>
+            ))}
           </Stack>
+        </Section>
+      </Box>
+
+      {/* Edit */}
+      <Dialog open={!!edit} onClose={() => setEdit(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Edit person</DialogTitle>
+        <DialogContent dividers>
+          {edit && (
+            <Stack spacing={2}>
+              <TextField label="Full name" value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} fullWidth />
+              <TextField select label="Role" value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })} helperText={ROLE_HELP[edit.role]} fullWidth>
+                {ROLE_OPTIONS.map((r) => <MenuItem key={r} value={r}>{ROLE_LABELS[r]}</MenuItem>)}
+              </TextField>
+            </Stack>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEditOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave}>Save</Button>
+          <Button onClick={() => setEdit(null)}>Cancel</Button>
+          <Button variant="contained" onClick={saveEdit}>Save</Button>
         </DialogActions>
       </Dialog>
 
-      {/* Invite dialog */}
-      <Dialog open={inviteOpen} onClose={() => setInviteOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Invite employee</DialogTitle>
+      {/* Invite */}
+      <Dialog open={!!invite} onClose={() => !busy && setInvite(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Add a person</DialogTitle>
         <DialogContent dividers>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField
-              label="Full name"
-              value={inviteName}
-              onChange={(e) => setInviteName(e.target.value)}
-              fullWidth
-            />
-            <TextField
-              label="Email"
-              type="email"
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-              fullWidth
-            />
-            <TextField
-              select
-              label="Role"
-              value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value)}
-              fullWidth
-            >
-              {ROLE_OPTIONS.map((r) => (
-                <MenuItem key={r} value={r}>{r}</MenuItem>
-              ))}
-            </TextField>
-          </Stack>
+          {invite && (
+            <Stack spacing={2}>
+              <TextField label="Full name" value={invite.name} onChange={(e) => setInvite({ ...invite, name: e.target.value })} fullWidth autoFocus />
+              <TextField label="Work email" type="email" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} fullWidth />
+              <TextField select label="Role" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })} helperText={ROLE_HELP[invite.role]} fullWidth>
+                {ROLE_OPTIONS.map((r) => <MenuItem key={r} value={r}>{ROLE_LABELS[r]}</MenuItem>)}
+              </TextField>
+              <Alert severity="info" variant="outlined">You will get a link for them to set their password. Send it to them yourself.</Alert>
+            </Stack>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setInviteOpen(false)} disabled={inviting}>Cancel</Button>
-          <Button variant="contained" onClick={handleInvite} disabled={inviting}>
-            {inviting ? "Inviting…" : "Send Invite"}
-          </Button>
+          <Button onClick={() => setInvite(null)} disabled={busy}>Cancel</Button>
+          <Button variant="contained" onClick={sendInvite} disabled={busy}>{busy ? "Adding…" : "Add person"}</Button>
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={toast.open}
-        autoHideDuration={3000}
-        onClose={() => setToast((t) => ({ ...t, open: false }))}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-      >
-        <Alert severity={toast.type} variant="filled" sx={{ width: "100%" }}>
-          {toast.msg}
-        </Alert>
+      {/* Set-password link */}
+      <Dialog open={!!link} onClose={() => setLink(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Account created</DialogTitle>
+        <DialogContent dividers>
+          <Typography sx={{ mb: 2 }}>Send this link to <b>{link?.email}</b> so they can set their password and sign in:</Typography>
+          <TextField
+            value={link?.url || ""}
+            fullWidth
+            InputProps={{
+              readOnly: true,
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton onClick={() => navigator.clipboard.writeText(link.url).then(() => setToast({ type: "success", msg: "Link copied." }))}>
+                    <ContentCopyRounded />
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button variant="contained" onClick={() => setLink(null)}>Done</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar open={!!toast} autoHideDuration={4000} onClose={() => setToast(null)} anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
+        {toast ? <Alert severity={toast.type} variant="filled">{toast.msg}</Alert> : <span />}
       </Snackbar>
-    </Card>
+    </Box>
   );
 }

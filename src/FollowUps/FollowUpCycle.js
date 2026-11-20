@@ -1,4 +1,5 @@
 // src/FollowUps/FollowUpCycle.js
+import { asDate } from "../utils/dates";
 import { isSameDay, isAfter } from "date-fns";
 
 // Returns true if the client should be added back to the follow-up list
@@ -7,8 +8,8 @@ export function shouldTriggerRecurringFollowUp(client, today = new Date()) {
   if (!firstRaw) return false;
 
   const firstInstallmentDate = firstRaw.seconds
-    ? new Date(firstRaw.seconds * 1000)
-    : new Date(firstRaw);
+    ? asDate(firstRaw.seconds * 1000)
+    : asDate(firstRaw);
 
   if (isNaN(firstInstallmentDate.getTime())) return false;
 
@@ -16,7 +17,7 @@ export function shouldTriggerRecurringFollowUp(client, today = new Date()) {
   const payments = Array.isArray(client.payments) ? client.payments : [];
 
   const validPayments = payments.filter((p) => {
-    const date = new Date(p.date);
+    const date = asDate(p.date);
     return !isNaN(date.getTime()) && date >= firstInstallmentDate;
   });
 
@@ -33,7 +34,7 @@ export function shouldTriggerRecurringFollowUp(client, today = new Date()) {
 
   // Only trigger if nextFollowUpDate is today or in the past
   const followUpDate = client.nextFollowUpDate
-    ? new Date(client.nextFollowUpDate)
+    ? asDate(client.nextFollowUpDate)
     : null;
   const shouldReappear =
     followUpDate &&

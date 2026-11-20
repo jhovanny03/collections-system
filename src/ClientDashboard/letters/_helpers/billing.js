@@ -1,26 +1,16 @@
 // src/ClientDashboard/letters/_helpers/billing.js
-export function computeCurrentPastDue(client) {
-  const monthly = Number(client?.installmentAmount || 500);
-  const rawStart = client?.firstInstallmentDate;
-  if (!rawStart) return 0;
+import { computeBillingSnapshot } from "../../../Reports/utils/billingCompute";
 
-  const start = rawStart?.seconds ? new Date(rawStart.seconds * 1000) : new Date(rawStart);
-  if (isNaN(start.getTime())) return 0;
-
-  const today = new Date();
-  const monthsSinceStart =
-    (today.getFullYear() - start.getFullYear()) * 12 +
-    (today.getMonth() - start.getMonth()) +
-    (today.getDate() >= start.getDate() ? 1 : 0);
-
-  const expectedInstallments = Math.max(0, monthsSinceStart);
-  const expectedTotal = expectedInstallments * monthly;
-
-  const payments = Array.isArray(client?.payments) ? client.payments : [];
-  const validPaid = payments
-    .map((p) => ({ ...p, d: new Date(p.date) }))
-    .filter((p) => !isNaN(p.d.getTime()) && p.d >= start)
-    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-
-  return Math.max(0, expectedTotal - validPaid);
+/**
+ * The amount a warning letter says is past due: the same "amount due" the client page
+ * and reports show (monthly amount changes, skipped months, holds, the plan total cap,
+ * and every installment plan of the case combined).
+ *
+ * It used to be worked out separately (months since start x installmentAmount, $500 if
+ * unset, minus every payment), which kept counting months after a client had paid in
+ * full and ignored schedule changes and second plans.
+ */
+export function computeCurrentPastDue(client, asOf = new Date()) {
+  if (!client) return 0;
+  return Number(computeBillingSnapshot(client, asOf).amountDue || 0);
 }

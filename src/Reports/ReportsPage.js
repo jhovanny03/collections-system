@@ -1,109 +1,61 @@
 // src/Reports/ReportsPage.js
-import React, { useEffect, useState } from "react";
-import { Box, Tabs, Tab, Card, CardHeader, CardContent, Typography } from "@mui/material";
-import { collection, getDocs } from "firebase/firestore";
-import db from "../firebase";
+// Reports hub. Each tab answers one question; ?tab=<key> links straight to a tab.
+// Every money figure comes from the installment ledger (src/billing/ledger.js).
+import React from "react";
+import { Box, Tabs, Tab, Card, Typography } from "@mui/material";
+import { useSearchParams } from "react-router-dom";
+import { PageHeader } from "../ui/kit";
 
-import ARAgingReport from "./ARAgingReport";
-import CollectionsReport from "./CollectionsReport";
-import CohortReport from "./CohortReport";
+import ReportsOverview from "./ReportsOverview";
+import AgingReport from "./AgingReport";
+import DueCollectedReport from "./DueCollectedReport";
 import PaymentHistoryReport from "./PaymentHistoryReport";
-import PaymentAllocationsReport from "./PaymentAllocationsReport";
+import FollowUpsReport from "./FollowUpsReport";
+import MyCaseSyncReport from "./MyCaseSyncReport";
+import ForecastReport from "./ForecastReport";
+import RiskReport from "./RiskReport";
 
-function TabPanel({ value, index, children }) {
-  if (value !== index) return null;
-  return <Box sx={{ mt: 2 }}>{children}</Box>;
-}
+const TABS = [
+  { key: "overview", label: "Overview", help: "Where the money stands: what is owed, how old it is, how collection is going, who owes the most." },
+  { key: "aging", label: "Aging", help: "What every client owes by age: 0–30, 31–60, 61–90 and 90+ days from the 1st of each installment's month. Download for the accountant." },
+  { key: "forecast", label: "Forecast", help: "What should come in over the next 3 months from the plans, and how much is likely to." },
+  { key: "risk", label: "Risk & plan health", help: "Which plans will end owing, who needs to pay more to finish on time, and who is a candidate for write-off." },
+  { key: "collected", label: "Due vs collected", help: "Each month: installments due from clients who were up to date, how much was paid, by case type, and who has not paid." },
+  { key: "payments", label: "Payments received", help: "Every payment by day, with who recorded it (or MyCase)." },
+  { key: "followups", label: "Follow-ups & promises", help: "How the monthly follow-up list is going and how many promises are kept." },
+  { key: "mycase", label: "MyCase sync", help: "Whether the MyCase connection is healthy and what is waiting on a person." },
+];
+// Old links (bookmarks, Home tiles) keep working.
+const ALIASES = { collections: "collected", cohorts: "overview", allocations: "payments" };
 
 export default function ReportsPage() {
-  const [tab, setTab] = useState(0);
-  const [clients, setClients] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-
-  // Load clients once for Collections / Cohort / Payment Allocations
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const snap = await getDocs(collection(db, "clients"));
-        if (!mounted) return;
-        setClients(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      } catch (e) {
-        console.error("Failed to load clients for reports:", e);
-        setErr("Failed to load clients for reports.");
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  const [params, setParams] = useSearchParams();
+  const asked = ALIASES[params.get("tab")] || params.get("tab");
+  const key = TABS.some((t) => t.key === asked) ? asked : "overview";
+  const current = TABS.find((t) => t.key === key);
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1500, mx: "auto" }}>
-      <Card sx={{ borderRadius: 1 }}>
-        <CardHeader
-          title="Collections Reports"
-          subheader="Analyze receivables, cash collections, client cohorts, and payment allocations"
-          sx={{
-            "& .MuiCardHeader-title": { fontWeight: 700 },
-            "& .MuiCardHeader-subheader": { color: "text.secondary" },
-            pb: 0,
-          }}
-        />
-        <CardContent>
-          <Tabs
-            value={tab}
-            onChange={(_, v) => setTab(v)}
-            variant="scrollable"
-            allowScrollButtonsMobile
-          >
-            <Tab label="A/R Aging" />
-            <Tab label="Collections" />
-            <Tab label="Cohort Analysis" />
-            <Tab label="Payment History" />
-            <Tab label="Payment Allocations" />
-          </Tabs>
-
-          {loading && (
-            <Typography sx={{ p: 2 }} color="text.secondary">
-              Loading report data…
-            </Typography>
-          )}
-
-          {err && !loading && (
-            <Typography sx={{ p: 2 }} color="error">
-              {err}
-            </Typography>
-          )}
-
-          {!loading && !err && (
-            <>
-              <TabPanel value={tab} index={0}>
-                <ARAgingReport />
-              </TabPanel>
-
-              <TabPanel value={tab} index={1}>
-                <CollectionsReport clients={clients} />
-              </TabPanel>
-
-              <TabPanel value={tab} index={2}>
-                <CohortReport clients={clients} loading={loading} />
-              </TabPanel>
-
-              <TabPanel value={tab} index={3}>
-                <PaymentHistoryReport />
-              </TabPanel>
-
-              <TabPanel value={tab} index={4}>
-                <PaymentAllocationsReport clients={clients} />
-              </TabPanel>
-            </>
-          )}
-        </CardContent>
+    <Box>
+      <PageHeader title="Reports" subtitle="Everything about billing and payments in one place." />
+      <Card sx={{ mb: 2.5, px: 1 }}>
+        <Tabs value={key} onChange={(_, v) => setParams({ tab: v }, { replace: true })} variant="scrollable" allowScrollButtonsMobile>
+          {TABS.map((t) => (
+            <Tab key={t.key} value={t.key} label={t.label} />
+          ))}
+        </Tabs>
       </Card>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {current.help}
+      </Typography>
+
+      {key === "overview" && <ReportsOverview />}
+      {key === "aging" && <AgingReport />}
+      {key === "forecast" && <ForecastReport />}
+      {key === "risk" && <RiskReport />}
+      {key === "collected" && <DueCollectedReport />}
+      {key === "payments" && <PaymentHistoryReport />}
+      {key === "followups" && <FollowUpsReport />}
+      {key === "mycase" && <MyCaseSyncReport />}
     </Box>
   );
 }

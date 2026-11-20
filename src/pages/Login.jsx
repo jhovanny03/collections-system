@@ -118,7 +118,7 @@ export default function Login() {
               borderRadius: 3,
               padding: "2px",
               background:
-                "linear-gradient(135deg, #0b3a75 0%, #00a693 50%, #d44500 100%)",
+                "linear-gradient(135deg, #000C66 0%, #17A398 50%, #D34E24 100%)",
               WebkitMask:
                 "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",
               WebkitMaskComposite: "xor",
@@ -225,7 +225,7 @@ export default function Login() {
                       borderColor: "rgba(255,255,255,0.4)",
                     },
                     "&.Mui-focused fieldset": {
-                      borderColor: "#00a693",
+                      borderColor: "#17A398",
                     },
                   },
                 }}
@@ -266,7 +266,7 @@ export default function Login() {
                       borderColor: "rgba(255,255,255,0.4)",
                     },
                     "&.Mui-focused fieldset": {
-                      borderColor: "#00a693",
+                      borderColor: "#17A398",
                     },
                   },
                 }}
@@ -294,7 +294,7 @@ export default function Login() {
                     textTransform: "none",
                     fontWeight: 700,
                     px: 3,
-                    bgcolor: "#00a693",
+                    bgcolor: "#17A398",
                     "&:hover": { bgcolor: "#008f81" },
                   }}
                 >

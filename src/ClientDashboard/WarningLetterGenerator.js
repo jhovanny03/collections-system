@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import React, { useState } from "react";
 import {
   Box,
@@ -31,7 +32,7 @@ export default function WarningLetterGenerator({ client, open, onClose }) {
   };
 
   const formatDateLong = (date) =>
-    new Date(date).toLocaleDateString("en-US", {
+    asDate(date).toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -58,14 +59,14 @@ export default function WarningLetterGenerator({ client, open, onClose }) {
     const today = new Date();
 
     const validPayments = (client?.payments || []).filter(
-      (p) => new Date(p.date) >= firstInstallmentDate
+      (p) => asDate(p.date) >= firstInstallmentDate
     );
     const validTotalPaid = validPayments.reduce((sum, p) => sum + p.amount, 0);
     const paidInstallments = Math.floor(validTotalPaid / monthlyInstallment);
 
     const dueMonths = [];
     for (let i = paidInstallments; ; i++) {
-      const dueDate = new Date(firstInstallmentDate);
+      const dueDate = asDate(firstInstallmentDate);
       dueDate.setMonth(dueDate.getMonth() + i);
       if (dueDate > today) break;
       dueMonths.push({

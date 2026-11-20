@@ -1,4 +1,5 @@
 // src/ClientFollowUps/FollowUpsInsightsView.jsx
+import { asDate } from "../utils/dates";
 import React, { useMemo } from "react";
 import {
   Box,
@@ -92,7 +93,7 @@ export default function FollowUpsInsightsView({ items = [] }) {
       if (!it.lastContactAt) {
         noContact += 1;
       } else {
-        const last = new Date(it.lastContactAt);
+        const last = asDate(it.lastContactAt);
         const diffDays = (now - last) / msPerDay;
         if (diffDays <= 7) touched7d += 1;
         if (diffDays >= 30) stale30d += 1;

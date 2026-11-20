@@ -1,6 +1,6 @@
+import { asDate } from "../utils/dates";
 import React, { useMemo, useState } from "react";
 import { doc, updateDoc, arrayUnion } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
 import db from "../firebase";
 
 import {
@@ -26,6 +26,7 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
+import { getActor } from "../auth/actor";
 
 const ADJUSTMENT_TYPES = [
   { value: "DERIVATIVE_ADD_ON", label: "Derivative add-on" },
@@ -55,8 +56,7 @@ export default function InvoiceAdjustments({ client, setClient }) {
   const [saving, setSaving] = useState(false);
 
   const userLabel = (() => {
-    const user = getAuth().currentUser;
-    return user?.displayName || user?.email || "System";
+    return getActor().name;
   })();
 
   const ref = client?.id ? doc(db, "clients", client.id) : null;
@@ -65,7 +65,7 @@ export default function InvoiceAdjustments({ client, setClient }) {
     const arr = Array.isArray(client?.invoiceAdjustments)
       ? client.invoiceAdjustments
       : [];
-    return arr.slice().sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
+    return arr.slice().sort((a, b) => asDate(b.createdAt || b.date) - asDate(a.createdAt || a.date));
   }, [client]);
 
   if (!client?.id) return null;
@@ -184,7 +184,13 @@ export default function InvoiceAdjustments({ client, setClient }) {
         avatar={<ReceiptLongIcon color="primary" />}
         title="Invoice Adjustments"
         subheader="Add or remove invoice-level adjustments. Down payments here reduce the net amount added to installments (amount − down payment)."
-        sx={{ "& .MuiCardHeader-title": { fontWeight: 700 } }}
+        sx={{
+          "& .MuiCardHeader-title": { fontWeight: 700 },
+          // On narrow screens the button drops below the title instead of off the card.
+          flexWrap: "wrap",
+          rowGap: 1,
+          "& .MuiCardHeader-action": { alignSelf: "center", m: 0 },
+        }}
         action={
           <Button
             variant="contained"
@@ -272,7 +278,7 @@ export default function InvoiceAdjustments({ client, setClient }) {
                       />
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
-                      {adj.createdAt ? new Date(adj.createdAt).toLocaleString() : "—"} • {adj.createdBy || "—"}
+                      {adj.createdAt ? asDate(adj.createdAt).toLocaleString() : "—"} • {adj.createdBy || "—"}
                     </Typography>
                     {adj.note && (
                       <Typography variant="body2" sx={{ mt: 0.5 }}>

@@ -24,8 +24,8 @@ const GENERATE_RESET_ENDPOINT =
 const MIN_LEN = 6;
 
 // 🎨 Brand colors
-const FEDERAL_BLUE = "#0b3a75";
-const PERSIAN_GREEN = "#00a693";
+const FEDERAL_BLUE = "#000C66";
+const PERSIAN_GREEN = "#17A398";
 
 export default function ActionHandler() {
   const [sp] = useSearchParams();
@@ -144,7 +144,7 @@ export default function ActionHandler() {
     <Box
       sx={{
         minHeight: "100vh",
-        backgroundImage: "linear-gradient(135deg, #0b3a75 0%, #00a693 100%)", // ✅ gradient only
+        backgroundImage: "linear-gradient(135deg, #000C66 0%, #17A398 100%)", // ✅ gradient only
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -221,7 +221,7 @@ export default function ActionHandler() {
                   fontWeight: 700,
                   px: 3,
                   bgcolor: PERSIAN_GREEN,
-                  "&:hover": { bgcolor: "#00877c" },
+                  "&:hover": { bgcolor: "#12867D" },
                 }}
               >
                 Set Password
@@ -268,7 +268,7 @@ export default function ActionHandler() {
                   fontWeight: 700,
                   px: 3,
                   bgcolor: PERSIAN_GREEN,
-                  "&:hover": { bgcolor: "#00877c" },
+                  "&:hover": { bgcolor: "#12867D" },
                 }}
               >
                 {resetDone ? "Password Updated" : "Update Password"}

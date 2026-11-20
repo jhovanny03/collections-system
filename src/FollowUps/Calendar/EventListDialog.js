@@ -1,4 +1,5 @@
 // src/FollowUps/Calendar/EventListDialog.js
+import { asDate } from "../../utils/dates";
 import React, { useEffect, useState } from 'react';
 import {
   Dialog,
@@ -39,7 +40,7 @@ export function EventListDialog() {
   useEffect(() => {
     if (viewDate) {
       const list = events.filter(ev =>
-        isSameDay(parseISO(ev.start), new Date(viewDate))
+        isSameDay(parseISO(ev.start), asDate(viewDate))
       );
       setDayEvents(list);
       setOpen(true);
@@ -71,7 +72,7 @@ export function EventListDialog() {
         transition={{ duration: 0.2 }}
       >
         <DialogTitle>
-          Events on {viewDate && format(new Date(viewDate), 'PPP')}
+          Events on {viewDate && format(asDate(viewDate), 'PPP')}
         </DialogTitle>
         <DialogContent dividers>
           {dayEvents.length === 0 ? (

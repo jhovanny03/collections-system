@@ -1,3 +1,4 @@
+import { asDate } from "../../utils/dates";
 import React from "react";
 import {
   Paper, Table, TableHead, TableBody, TableRow, TableCell,
@@ -6,7 +7,7 @@ import {
 
 // Week label “Nov-03”
 const prettyWeek = (weekKey) => {
-  const d = new Date(weekKey);
+  const d = asDate(weekKey);
   const m = d.toLocaleString("default", { month: "short" });
   const day = String(d.getDate()).padStart(2, "0");
   return `${m}-${day}`;

@@ -1,6 +1,7 @@
 // EditClient.jsx
 import React, { useEffect, useState } from "react";
 import db from "./firebase";
+import { FEATURES } from "./config/features";
 import { doc, updateDoc } from "firebase/firestore";
 import {
   Dialog,
@@ -31,7 +32,11 @@ const CASE_TYPES = [
 
 const CASE_STATUSES = ["ACTIVE", "FILED", "APPROVED"];
 
+// In the MyCase rebuild these fields come from MyCase; only Case Stage stays editable.
+const FROM_MYCASE = "From MyCase. Change it there.";
+
 export default function EditClient({ client, onClose, onSave }) {
+  const locked = !FEATURES.editMyCaseFields;
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [myCaseLink, setMyCaseLink] = useState("");
@@ -59,7 +64,8 @@ export default function EditClient({ client, onClose, onSave }) {
     e?.preventDefault?.();
 
     // Minimal required fields (kept same as your version; caseTitle is optional)
-    if (!firstName.trim() || !lastName.trim() || !caseType || !caseStatus || !myCaseLink.trim()) {
+    // MyCase records: name, link and case type come from MyCase (case type may still be blank there).
+    if (!firstName.trim() || !lastName.trim() || (!locked && !caseType) || !caseStatus || !myCaseLink.trim()) {
       setToast({ open: true, type: "error", msg: "Please fill in all required fields." });
       return;
     }
@@ -71,7 +77,8 @@ export default function EditClient({ client, onClose, onSave }) {
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       myCaseLink: myCaseLink.trim(),
-      caseType,
+      // A MyCase record's case type is kept in step by the sync; never written from here.
+      ...(locked ? {} : { caseType }),
       caseStatus,
       updatedAt: now,
       lastChangeAt: now,
@@ -110,7 +117,9 @@ export default function EditClient({ client, onClose, onSave }) {
                   onChange={(e) => setFirstName(e.target.value)}
                   required
                   fullWidth
-                  autoFocus
+                  autoFocus={!locked}
+                  disabled={locked}
+                  helperText={locked ? FROM_MYCASE : undefined}
                 />
               </Grid>
               <Grid item xs={12} sm={6}>
@@ -120,6 +129,8 @@ export default function EditClient({ client, onClose, onSave }) {
                   onChange={(e) => setLastName(e.target.value)}
                   required
                   fullWidth
+                  disabled={locked}
+                  helperText={locked ? FROM_MYCASE : undefined}
                 />
               </Grid>
 
@@ -130,8 +141,9 @@ export default function EditClient({ client, onClose, onSave }) {
                   onChange={(e) => setMyCaseLink(e.target.value)}
                   required
                   fullWidth
+                  disabled={locked}
                   placeholder="https://law-firm-of-moumita-rahman-pllc.mycase.com/..."
-                  helperText="Paste the client's MyCase profile link."
+                  helperText={locked ? FROM_MYCASE : "Paste the client's MyCase profile link."}
                 />
               </Grid>
 
@@ -142,29 +154,36 @@ export default function EditClient({ client, onClose, onSave }) {
                   value={caseTitle}
                   onChange={(e) => setCaseTitle(e.target.value)}
                   fullWidth
+                  disabled={locked}
                   placeholder="e.g., A (04-25) SCOTT, DONMAUR (SPOUSE I-360 + AOS) Buffalo"
                   inputProps={{ maxLength: 200 }}
-                  helperText="Used to disambiguate clients with the same name. Shows as a compact tag in the list."
+                  helperText={locked ? FROM_MYCASE : "Used to disambiguate clients with the same name. Shows as a compact tag in the list."}
                 />
               </Grid>
 
               <Grid item xs={12} sm={6}>
-                <TextField
-                  select
-                  label="Case Type"
-                  value={caseType}
-                  onChange={(e) => setCaseType(e.target.value)}
-                  required
-                  fullWidth
-                  SelectProps={{ native: true }}
-                >
-                  <option value="" />
-                  {CASE_TYPES.map((ct) => (
-                    <option key={ct} value={ct}>
-                      {ct}
-                    </option>
-                  ))}
-                </TextField>
+                {locked ? (
+                  // Comes from the case's practice area in MyCase; change it there.
+                  <TextField label="Case Type" value={caseType || "Not set in MyCase"} fullWidth disabled
+                    helperText="From MyCase's practice area. Change it there." />
+                ) : (
+                  <TextField
+                    select
+                    label="Case Type"
+                    value={caseType}
+                    onChange={(e) => setCaseType(e.target.value)}
+                    required
+                    fullWidth
+                    SelectProps={{ native: true }}
+                  >
+                    <option value="" />
+                    {CASE_TYPES.map((ct) => (
+                      <option key={ct} value={ct}>
+                        {ct}
+                      </option>
+                    ))}
+                  </TextField>
+                )}
               </Grid>
 
               <Grid item xs={12} sm={6}>

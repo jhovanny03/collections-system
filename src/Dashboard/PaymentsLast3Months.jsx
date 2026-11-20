@@ -1,4 +1,5 @@
 // ==========================
+import { asDate } from "../utils/dates";
 // src/Dashboard/PaymentsLast3Months.jsx
 // ==========================
 
@@ -15,7 +16,7 @@ import { db } from "../firebase";
 const DUE_DAY = 15;
 
 const toDate = (v) =>
-  v?.toDate?.() ? v.toDate() : isNaN(new Date(v)) ? null : new Date(v);
+  v?.toDate?.() ? v.toDate() : isNaN(asDate(v)) ? null : asDate(v);
 
 const startOfMonth = (d) =>
   new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
@@ -57,8 +58,8 @@ function getInstallmentAmountForDate(schedule, date) {
   if (!Array.isArray(schedule) || schedule.length === 0) return 500;
   for (let i = 0; i < schedule.length; i++) {
     const s = schedule[i];
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
   return 500;
@@ -96,7 +97,7 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   // Build months up to monthEnd with strict CAP gate
   const months = [];

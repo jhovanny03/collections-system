@@ -1,4 +1,5 @@
 // src/Level10/index.jsx
+import { asDate } from "../utils/dates";
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import db from "../firebase";
@@ -186,8 +187,8 @@ export default function Level10() {
 
   // Compute live auto metrics
   const computeLive = async (dateYmd) => {
-    const monday = new Date(dateYmd);
-    const sunday = new Date(monday);
+    const monday = asDate(dateYmd);
+    const sunday = asDate(monday);
     sunday.setDate(sunday.getDate() + 6);
     const snap = await getDocs(collection(db, "clients"));
     const clients = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -207,7 +208,7 @@ export default function Level10() {
   const populateWeek = async () => {
     try {
       setBusy(true);
-      const picked = new Date(meetingDate);
+      const picked = asDate(meetingDate);
       const pickedMonth = ym(picked);
       if (pickedMonth !== month) setMonth(pickedMonth);
 
@@ -247,9 +248,9 @@ export default function Level10() {
   const renderColumns = useMemo(() => columns.slice().sort(), [columns]);
 
   // ⬇️ NEW: stable week dates for the TrendsPanel (derived from meetingDate)
-  const mondayDate = useMemo(() => new Date(meetingDate), [meetingDate]);
+  const mondayDate = useMemo(() => asDate(meetingDate), [meetingDate]);
   const sundayDate = useMemo(() => {
-    const d = new Date(meetingDate);
+    const d = asDate(meetingDate);
     d.setDate(d.getDate() + 6);
     return d;
   }, [meetingDate]);

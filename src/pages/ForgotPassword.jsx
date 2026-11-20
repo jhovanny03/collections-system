@@ -15,8 +15,8 @@ import { useNavigate } from "react-router-dom";
 import verticalLogo from "../assets/Vertical Logo ENG.png";
 
 // Brand colors (match ActionHandler)
-const FEDERAL_BLUE = "#0b3a75";
-const PERSIAN_GREEN = "#00a693";
+const FEDERAL_BLUE = "#000C66";
+const PERSIAN_GREEN = "#17A398";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
@@ -149,7 +149,7 @@ export default function ForgotPassword() {
                   fontWeight: 700,
                   px: 3,
                   bgcolor: PERSIAN_GREEN,
-                  "&:hover": { bgcolor: "#00877c" },
+                  "&:hover": { bgcolor: "#12867D" },
                   minWidth: 160,
                 }}
               >

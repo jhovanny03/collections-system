@@ -1,4 +1,5 @@
 // src/FollowUps/Calendar/AddEditEventDialog.js
+import { asDate } from "../../utils/dates";
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
@@ -48,10 +49,10 @@ export function AddEditEventDialog() {
         id: viewEventToEdit.id || Date.now().toString(),
         title: viewEventToEdit.title || '',
         start: viewEventToEdit.start
-          ? format(new Date(viewEventToEdit.start), "yyyy-MM-dd'T'HH:mm")
+          ? format(asDate(viewEventToEdit.start), "yyyy-MM-dd'T'HH:mm")
           : emptyDateStr,
         end: viewEventToEdit.end
-          ? format(new Date(viewEventToEdit.end), "yyyy-MM-dd'T'HH:mm")
+          ? format(asDate(viewEventToEdit.end), "yyyy-MM-dd'T'HH:mm")
           : emptyDateStr,
         color: viewEventToEdit.color || 'primary',
         description: viewEventToEdit.description || '',
@@ -68,8 +69,8 @@ export function AddEditEventDialog() {
   const handleSubmit = () => {
     const data = {
       ...form,
-      start: new Date(form.start),
-      end: new Date(form.end),
+      start: asDate(form.start),
+      end: asDate(form.end),
     };
     if (mode === 'add') addEvent(data);
     else editEvent(data);

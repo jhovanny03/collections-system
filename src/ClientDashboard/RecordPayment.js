@@ -11,7 +11,9 @@ import {
   where,
 } from "firebase/firestore";
 import db from "../firebase";
-import { getAuth } from "firebase/auth";
+import { asDate, formatDate, todayYMD } from "../utils/dates";
+import { isMultiPlan, sortedPlans, planViews } from "../billing/plans";
+import { FEATURES } from "../config/features";
 
 // MUI
 import {
@@ -41,12 +43,14 @@ import {
   Chip,
   Tooltip,
   Typography,
+  MenuItem,
 } from "@mui/material";
 
 import CreditCardIcon from "@mui/icons-material/CreditCard";
 import DeleteIcon from "@mui/icons-material/Delete";
 import TodayIcon from "@mui/icons-material/Today";
 import SaveIcon from "@mui/icons-material/Save";
+import { getActor } from "../auth/actor";
 
 // ===== Helpers =====
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
@@ -57,12 +61,12 @@ const labelFor = (d) =>
   `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
 
 const toDate = (raw) =>
-  raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+  raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw);
 
 const getInstallmentAmountForDate = (date, schedule, fallbackAmount) => {
   for (const s of schedule) {
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount);
   }
   return Number(fallbackAmount || 500);
@@ -105,12 +109,12 @@ const buildDueMonthBuckets = (client) => {
 
   const schedule = (client?.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   const skipSet = buildSkipSet(client);
 
   const buckets = [];
-  let cursor = new Date(firstDueDate);
+  let cursor = asDate(firstDueDate);
   let expectedAccum = 0;
   let guard = 0;
 
@@ -147,12 +151,12 @@ const buildDueMonthBuckets = (client) => {
 // Apply prior payments only in memory so we know which month balances remain open
 const applyPriorPaymentsToBuckets = (client, buckets) => {
   const initialPaymentDate = client?.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
 
   const priorPayments = (client?.payments || [])
     .filter((p) => {
-      const d = new Date(p.date);
+      const d = asDate(p.date);
       if (isNaN(d)) return false;
       if (!initialPaymentDate) return true;
       return d > initialPaymentDate;
@@ -162,7 +166,7 @@ const applyPriorPaymentsToBuckets = (client, buckets) => {
       date: p.date,
     }))
     .filter((p) => p.amount > 0)
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+    .sort((a, b) => asDate(a.date) - asDate(b.date));
 
   for (const p of priorPayments) {
     let remaining = p.amount;
@@ -213,7 +217,7 @@ const buildAllocationRowsForNewPayment = ({
 
       paymentId,
       paymentDate,
-      paymentDateTs: new Date(`${paymentDate}T00:00:00`),
+      paymentDateTs: asDate(`${paymentDate}T00:00:00`),
 
       dueMonthKey: bucket.dueMonthKey,
       dueMonthLabel: bucket.dueMonthLabel,
@@ -242,6 +246,11 @@ export default function RecordPayment({ client, setClient }) {
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState("");
   const [saving, setSaving] = useState(false);
+  // Cases with several installment plans: which plan this payment is for.
+  const multiPlan = isMultiPlan(client);
+  const plans = sortedPlans(client);
+  const [planInvoiceId, setPlanInvoiceId] = useState("");
+  const selectedPlanId = multiPlan ? planInvoiceId || String(plans[0].invoiceId) : null;
 
   const [toast, setToast] = useState({ open: false, type: "success", msg: "" });
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -249,7 +258,7 @@ export default function RecordPayment({ client, setClient }) {
 
   const payments = client?.payments || [];
   const paymentsForTable = useMemo(() => {
-    return [...payments].sort((a, b) => new Date(b.date) - new Date(a.date));
+    return [...payments].sort((a, b) => asDate(b.date) - asDate(a.date));
   }, [payments]);
 
   const money = (n) =>
@@ -271,10 +280,8 @@ export default function RecordPayment({ client, setClient }) {
       return;
     }
 
-    const auth = getAuth();
-    const user = auth.currentUser;
     const recordedBy =
-      user?.displayName || user?.email || user?.uid || "Unknown User";
+      getActor().name;
 
     setSaving(true);
     try {
@@ -291,11 +298,12 @@ export default function RecordPayment({ client, setClient }) {
 
         amount: amountNum,
         paymentDate,
-        paymentDateTs: new Date(`${paymentDate}T00:00:00`),
+        paymentDateTs: asDate(`${paymentDate}T00:00:00`),
 
         recordedAt: new Date().toISOString(),
         recordedBy,
         source: "manual",
+        ...(selectedPlanId ? { invoiceId: selectedPlanId } : {}),
       };
 
       const ledgerRef = await addDoc(collection(db, "payments"), ledgerPayment);
@@ -308,6 +316,7 @@ export default function RecordPayment({ client, setClient }) {
         date: paymentDate,
         recordedAt: ledgerPayment.recordedAt,
         recordedBy,
+        ...(selectedPlanId ? { invoiceId: selectedPlanId } : {}),
       };
 
       const updatedPayments = [...payments, newPayment];
@@ -315,8 +324,8 @@ export default function RecordPayment({ client, setClient }) {
 
       // Clear payment promise if conditions met
       if (client.paymentPromise) {
-        const promisedDate = new Date(client.paymentPromise.date);
-        const actualDate = new Date(paymentDate);
+        const promisedDate = asDate(client.paymentPromise.date);
+        const actualDate = asDate(paymentDate);
         const promisedAmount = parseFloat(client.paymentPromise.amount);
 
         if (actualDate <= promisedDate && newPayment.amount >= promisedAmount) {
@@ -329,13 +338,17 @@ export default function RecordPayment({ client, setClient }) {
 
       // 3) Create allocation rows ONLY for this new payment
       try {
+        // Allocate against the chosen plan's own months and payments.
+        const target = selectedPlanId
+          ? planViews(client).find((v) => v.planInvoiceId === selectedPlanId) || client
+          : client;
         const allocationRows = buildAllocationRowsForNewPayment({
-          client,
+          client: target,
           paymentId,
           paymentDate,
           amountNum,
           recordedBy,
-        });
+        }).map((row) => (selectedPlanId ? { ...row, planInvoiceId: selectedPlanId } : row));
 
         if (allocationRows.length) {
           await Promise.all(
@@ -416,13 +429,22 @@ export default function RecordPayment({ client, setClient }) {
     <Card sx={{ borderRadius: 3, mb: 3 }}>
       <CardHeader
         avatar={<CreditCardIcon color="primary" />}
-        title="Record Payment"
-        subheader="Add a payment and keep the promise status up to date"
+        title={FEATURES.manualPayments ? "Record Payment" : "Payments"}
+        subheader={FEATURES.manualPayments
+          ? "Add a payment and keep the promise status up to date"
+          : "Synced from MyCase every hour"}
         sx={{ "& .MuiCardHeader-title": { fontWeight: 700 } }}
       />
 
       <CardContent>
+        {!FEATURES.manualPayments && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Payments come from MyCase automatically. To record or correct a payment, do it in MyCase;
+            refunds and bounced payments there are applied here too.
+          </Alert>
+        )}
         {/* Form */}
+        {FEATURES.manualPayments && (<>
         <Stack
           direction={{ xs: "column", md: "row" }}
           spacing={2}
@@ -440,7 +462,7 @@ export default function RecordPayment({ client, setClient }) {
 
           <Button
             startIcon={<TodayIcon />}
-            onClick={() => setPaymentDate(new Date().toISOString().slice(0, 10))}
+            onClick={() => setPaymentDate(todayYMD())}
             variant="outlined"
             size="small"
           >
@@ -462,6 +484,23 @@ export default function RecordPayment({ client, setClient }) {
             }}
           />
 
+          {multiPlan && (
+            <TextField
+              select
+              label="Plan"
+              size="small"
+              value={selectedPlanId}
+              onChange={(e) => setPlanInvoiceId(e.target.value)}
+              sx={{ minWidth: 220 }}
+            >
+              {plans.map((p, i) => (
+                <MenuItem key={p.invoiceId} value={String(p.invoiceId)}>
+                  Plan {i + 1} · invoice {p.invoiceNumber || p.invoiceId} · ${Number(p.monthlyAmount).toLocaleString()}/mo
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+
           <Box flexGrow={1} />
 
           <Button
@@ -475,6 +514,7 @@ export default function RecordPayment({ client, setClient }) {
         </Stack>
 
         <Divider sx={{ my: 2 }} />
+        </>)}
 
         {/* History */}
         {(payments?.length || 0) > 0 ? (
@@ -485,9 +525,11 @@ export default function RecordPayment({ client, setClient }) {
                   <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Amount</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Processed By</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }} align="center">
-                    Actions
-                  </TableCell>
+                  {FEATURES.manualPayments && (
+                    <TableCell sx={{ fontWeight: 700 }} align="center">
+                      Actions
+                    </TableCell>
+                  )}
                 </TableRow>
               </TableHead>
 
@@ -505,7 +547,7 @@ export default function RecordPayment({ client, setClient }) {
                       <TableCell>
                         <Chip
                           size="small"
-                          label={new Date(p.date).toLocaleDateString()}
+                          label={formatDate(p.date)}
                         />
                       </TableCell>
 
@@ -517,17 +559,19 @@ export default function RecordPayment({ client, setClient }) {
                         </Typography>
                       </TableCell>
 
-                      <TableCell align="center">
-                        <Tooltip title="Delete payment">
-                          <IconButton
-                            color="error"
-                            size="small"
-                            onClick={() => askDelete(originalIndex)}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </TableCell>
+                      {FEATURES.manualPayments && (
+                        <TableCell align="center">
+                          <Tooltip title="Delete payment">
+                            <IconButton
+                              color="error"
+                              size="small"
+                              onClick={() => askDelete(originalIndex)}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}

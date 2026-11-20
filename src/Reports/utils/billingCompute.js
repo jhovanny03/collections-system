@@ -1,4 +1,7 @@
 // src/Reports/utils/billingCompute.js
+import { asDate } from "../../utils/dates";
+import { withPlans } from "../../billing/plans";
+import { clientPosition } from "../../billing/ledger";
 //
 // Snapshot math used by A/R Aging.
 // This version mirrors the logic in ClientDashboard/BillingOverview:
@@ -10,7 +13,22 @@
 // - Only payments STRICTLY AFTER initialPaymentDate count as installments
 // - Payments are allocated FIFO to past months, then to future months (prepayments)
 
+// Cases with several installment plans are computed plan by plan and combined
+// (see src/billing/plans.js). Single-plan clients go straight through unchanged.
 export function computeBillingSnapshot(client, asOfDate = new Date()) {
+  if (!client) return computeSinglePlanSnapshot(client, asOfDate);
+  const snap = withPlans(client, (c) => computeSinglePlanSnapshot(c, asOfDate));
+  // What is owed comes from the installment ledger (src/billing/ledger.js), the single
+  // source for Home, Reports, Clients and the profile header, so every page agrees.
+  try {
+    const pos = clientPosition(client, asDate(asOfDate));
+    return { ...snap, amountDue: pos.owedNow, missedMonths: pos.monthsBehind, remainingBalance: pos.balance };
+  } catch (e) {
+    return snap;
+  }
+}
+
+export function computeSinglePlanSnapshot(client, asOfDate = new Date()) {
   if (!client) {
     return {
       status: "active",
@@ -28,7 +46,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
 
   // ---------- helpers ----------
   const toDate = (raw) =>
-    raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+    raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw);
   const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
   const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
   const labelFor = (d) =>
@@ -59,7 +77,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   const rawStart = client.firstInstallmentDate;
   const initialPayment = Number(client.initialPaymentAmount || 0);
   const initialPaymentDate = client.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
 
   // Cap of what can be collected via installments (effective invoice minus down payment)
@@ -86,7 +104,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
 
   // ---------- scheduling anchors (match BillingOverview) ----------
   const expectedAnchor = client.expectedAnchor
-    ? new Date(client.expectedAnchor)
+    ? asDate(client.expectedAnchor)
     : null;
   const anchorDate = expectedAnchor || toDate(rawStart || new Date());
 
@@ -97,7 +115,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
     15
   );
 
-  const today = new Date(asOfDate);
+  const today = asDate(asOfDate);
   const pauseStartedAt = client.pauseStartedAt
     ? toDate(client.pauseStartedAt)
     : null;
@@ -111,12 +129,12 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   // Sorted schedule
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   const getInstallmentAmountForDate = (date) => {
     for (const s of schedule) {
-      const sStart = new Date(s.start);
-      const sEnd = new Date(s.end);
+      const sStart = asDate(s.start);
+      const sEnd = asDate(s.end);
       if (date >= sStart && date <= sEnd) return Number(s.amount || 0);
     }
     // Note: BillingOverview hard-codes 500 if no schedule match
@@ -127,7 +145,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   const allPayments = Array.isArray(client.payments) ? client.payments : [];
   const paymentsAfterInitial = allPayments.filter((p) => {
     if (!initialPaymentDate) return false;
-    const d = new Date(p.date);
+    const d = asDate(p.date);
     return d > initialPaymentDate;
   });
 
@@ -136,7 +154,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
       amount: Number(p.amount || 0),
       date: p.date,
     }))
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+    .sort((a, b) => asDate(a.date) - asDate(b.date));
 
   // ---------- build months up to cutoff (capped by collectibleCap) ----------
   const monthsUpToCutoff = [];
@@ -150,18 +168,16 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
           )
         : today;
 
-    const cursor = new Date(firstDueDate);
+    const cursor = asDate(firstDueDate);
     let expectedAccum = 0;
 
     while (cursor <= cutoff) {
       if (!monthIsSkipped(cursor)) {
-        const amt = getInstallmentAmountForDate(cursor);
+        // Stop at the plan balance; the last installment is whatever is left of it.
+        if (expectedAccum >= collectibleCap - 0.005) break;
+        const amt = Math.min(getInstallmentAmountForDate(cursor), collectibleCap - expectedAccum);
 
-        // Apply the collectibleCap limit just like BillingOverview:
-        if (expectedAccum >= collectibleCap) break;
-        if (expectedAccum + amt > collectibleCap) break;
-
-        monthsUpToCutoff.push(new Date(cursor));
+        monthsUpToCutoff.push({ date: asDate(cursor), amount: amt });
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);
@@ -173,8 +189,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   const dueMonths = [];
   let oldestUnpaidDueDate = null;
 
-  for (const monthDate of monthsUpToCutoff) {
-    const amountDue = getInstallmentAmountForDate(monthDate);
+  for (const { date: monthDate, amount: amountDue } of monthsUpToCutoff) {
     let monthPaid = 0;
 
     for (const p of paymentPool) {
@@ -187,9 +202,10 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
       p.amount -= used;
     }
 
-    if (monthPaid < amountDue) {
-      dueMonths.push({ label: labelFor(monthDate), amount: amountDue });
-      if (!oldestUnpaidDueDate) oldestUnpaidDueDate = new Date(monthDate);
+    if (monthPaid < amountDue - 0.005) {
+      // Only the unpaid part counts (a $450 payment on a $500 month leaves $50 due).
+      dueMonths.push({ label: labelFor(monthDate), amount: amountDue - monthPaid });
+      if (!oldestUnpaidDueDate) oldestUnpaidDueDate = asDate(monthDate);
     }
   }
 
@@ -197,7 +213,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
   if (!isClosed && !isPaused) {
     let leftover = paymentPool.reduce((s, p) => s + (p.amount || 0), 0);
     if (leftover > 0) {
-      const futureCursor = new Date(today);
+      const futureCursor = asDate(today);
       futureCursor.setDate(15);
       if (futureCursor <= today) {
         futureCursor.setMonth(futureCursor.getMonth() + 1);
@@ -243,7 +259,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
       amount: Number(p.amount || 0),
       date: p.date,
     }))
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+    .sort((a, b) => asDate(a.date) - asDate(b.date));
 
   const monthIsFullyPaid = (d, pool) => {
     if (monthIsSkipped(d)) return true;
@@ -259,7 +275,7 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
     return paid >= due;
   };
 
-  const firstUnpaid = new Date(firstDueDate);
+  const firstUnpaid = asDate(firstDueDate);
   let guardSim = 0;
   while (
     !isClosed &&
@@ -292,24 +308,24 @@ export function computeBillingSnapshot(client, asOfDate = new Date()) {
 
 function getLastInstallmentPayment(client) {
   const initialPaymentDate = client.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
   const allPayments = Array.isArray(client.payments) ? client.payments : [];
 
   // Only consider installment payments (strictly after initialPaymentDate)
   const installmentPays = allPayments.filter((p) => {
     if (!initialPaymentDate) return false;
-    const d = new Date(p.date);
+    const d = asDate(p.date);
     return d > initialPaymentDate;
   });
 
   if (!installmentPays.length) return null;
 
   const latest = installmentPays.reduce((acc, p) =>
-    new Date(p.date) > new Date(acc.date) ? p : acc
+    asDate(p.date) > asDate(acc.date) ? p : acc
   );
 
-  const d = new Date(latest.date);
+  const d = asDate(latest.date);
   return {
     date: toYMD(d),
     amount: Number(latest.amount || 0),

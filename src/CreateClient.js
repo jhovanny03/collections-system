@@ -234,7 +234,7 @@ export default function CreateClient({ onClientCreated }) {
                       variant="contained"
                       disabled={loading}
                       sx={{
-                        bgcolor: "#0b3a75",
+                        bgcolor: "#000C66",
                         "&:hover": { bgcolor: "#092e5b" },
                       }}
                     >

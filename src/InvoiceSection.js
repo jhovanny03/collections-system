@@ -1,7 +1,7 @@
 // InvoiceSection.js
+import { asDate } from "./utils/dates";
 import React, { useState } from "react";
 import { doc, updateDoc } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
 import db from "./firebase";
 import {
   Button,
@@ -15,6 +15,8 @@ import {
   CardContent,
 } from "@mui/material";
 import { motion } from "framer-motion";
+import { FEATURES } from "./config/features";
+import { getActor } from "./auth/actor";
 
 export default function InvoiceSection({ client, setClient }) {
   const [invoiceInput, setInvoiceInput] = useState("");
@@ -34,12 +36,12 @@ export default function InvoiceSection({ client, setClient }) {
   const parseDateFlexible = (value) => {
     if (!value) return null;
     if (typeof value === "object" && value.seconds) {
-      return new Date(value.seconds * 1000);
+      return asDate(value.seconds * 1000);
     }
     if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
       return parseLocalYMD(value);
     }
-    return new Date(value);
+    return asDate(value);
   };
 
   const formatDate = (value) => {
@@ -77,9 +79,7 @@ export default function InvoiceSection({ client, setClient }) {
       return;
     }
 
-    const auth = getAuth();
-    const user = auth.currentUser;
-    const username = user?.displayName || user?.email || "Anonymous";
+    const username = getActor().name;
     const whenIso = new Date().toISOString();
 
     const clientRef = doc(db, "clients", client.id);
@@ -247,24 +247,31 @@ export default function InvoiceSection({ client, setClient }) {
             </Box>
           )}
 
-          <Box display="flex" gap={2}>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={() => setDrawerOpen(true)}
-            >
-              ✏️ {client.invoiceTotal ? "Edit Invoice" : "Add Invoice"}
-            </Button>
-            {client.invoiceTotal && (
+          {FEATURES.editInvoiceSetup ? (
+            <Box display="flex" gap={2}>
               <Button
-                variant="outlined"
-                color="error"
-                onClick={handleDeleteInvoice}
+                variant="contained"
+                color="primary"
+                onClick={() => setDrawerOpen(true)}
               >
-                🗑️ Delete Invoice
+                ✏️ {client.invoiceTotal ? "Edit Invoice" : "Add Invoice"}
               </Button>
-            )}
-          </Box>
+              {client.invoiceTotal && (
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={handleDeleteInvoice}
+                >
+                  🗑️ Delete Invoice
+                </Button>
+              )}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              The invoice total and initial payment come from this case&apos;s MyCase invoices
+              (set on Case Setup). Change them in MyCase.
+            </Typography>
+          )}
         </CardContent>
       </Card>
 

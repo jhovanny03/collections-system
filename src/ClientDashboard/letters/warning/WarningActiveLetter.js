@@ -2,13 +2,13 @@
 import React, { useMemo, useState } from "react";
 import { Box, Button, TextField, Snackbar, Alert, Stack, Typography } from "@mui/material";
 import { saveAs } from "file-saver";
-import { getAuth } from "firebase/auth";
 
 import { fetchTemplateBuffer } from "../_helpers/fetchTemplateBuffer";
 import { generateFilledLetterBlob } from "../_helpers/generateFilledLetterBlob";
 import { money, dateLong } from "../_helpers/formatters";
 import { computeCurrentPastDue } from "../_helpers/billing";
 import { saveLetterMetadata } from "../_helpers/history"; // optional but recommended
+import { getActor } from "../../../auth/actor";
 
 // Template stored in Firebase Storage
 const TEMPLATE_STORAGE_PATH = "letterTemplates/WarningLetter_ActiveClient.docx";
@@ -23,12 +23,11 @@ export default function WarningActiveLetter({ client }) {
 
   const today = useMemo(() => dateLong(new Date()), []);
   const agentName = useMemo(() => {
-    const user = getAuth().currentUser;
-    return user?.displayName || user?.email || "Agent";
+    return getActor().name;
   }, []);
   const totalPastDue = useMemo(
     () => computeCurrentPastDue(client),
-    [client?.firstInstallmentDate, client?.payments, client?.installmentAmount]
+    [client]
   );
 
   const onChange = (e) => setForm((s) => ({ ...s, [e.target.name]: e.target.value }));

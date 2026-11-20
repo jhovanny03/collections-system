@@ -17,8 +17,14 @@ const firebaseConfig = {
 // Init
 const app = initializeApp(firebaseConfig);
 
+// Which Firestore database this build uses. Unset = the original database.
+// REACT_APP_FIRESTORE_DATABASE=mycase-rebuild points the app at the MyCase rebuild,
+// a separate database in the same project; the original is never touched by it.
+export const DATABASE_ID = process.env.REACT_APP_FIRESTORE_DATABASE || "(default)";
+export const IS_REBUILD_DATABASE = DATABASE_ID !== "(default)";
+
 // Singletons
-const db = getFirestore(app);
+const db = IS_REBUILD_DATABASE ? getFirestore(app, DATABASE_ID) : getFirestore(app);
 const auth = getAuth(app);
 const storage = getStorage(app);
 

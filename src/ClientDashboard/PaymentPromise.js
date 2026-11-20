@@ -1,7 +1,7 @@
 // src/ClientDashboard/PaymentPromise.js
 import React, { useState } from "react";
-import { doc, updateDoc, arrayUnion } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { doc, updateDoc, arrayUnion, addDoc, collection } from "firebase/firestore";
+import { getActor } from "../auth/actor";
 import db from "../firebase";
 
 import {
@@ -27,11 +27,12 @@ import SaveIcon from "@mui/icons-material/Save";
 import CancelIcon from "@mui/icons-material/Close";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import UpcomingIcon from "@mui/icons-material/Upcoming";
+import { asDate, formatDate } from "../utils/dates";
 
 /** Brand colors (same as the rest of the app) */
-const FEDERAL_BLUE = "#0b3a75";
-const PERSIAN_GREEN = "#00a693";
-const SYRACUSE_RED = "#d44500";
+const FEDERAL_BLUE = "#000C66";
+const PERSIAN_GREEN = "#17A398";
+const SYRACUSE_RED = "#D34E24";
 
 /** ──────────────────────────────────────────────────────────────
  *  Named export used by Agenda/Week/Month Day calendar views
@@ -44,15 +45,16 @@ export async function savePaymentPromise(clientId, promiseDate, amount, notes) {
   if (!clientId) throw new Error("Missing client id");
   if (!promiseDate || !amount) throw new Error("Date and amount required");
 
+  const actor = getActor();
+  const who = actor.name;
   const updatedPromise = {
     date: promiseDate,
     amount: parseFloat(amount),
     notes: notes || "",
+    createdBy: actor.name,
+    createdByEmail: actor.email,
+    createdAt: new Date().toISOString(),
   };
-
-  const auth = getAuth();
-  const user = auth.currentUser;
-  const who = user?.displayName || user?.email || "Anonymous";
 
   const logMessage = `Client promised to pay $${Number(
     updatedPromise.amount
@@ -64,6 +66,7 @@ export async function savePaymentPromise(clientId, promiseDate, amount, notes) {
     message: logMessage,
     timestamp: new Date().toISOString(),
     user: who,
+    userEmail: actor.email,
   };
 
   const clientRef = doc(db, "clients", clientId);
@@ -71,6 +74,16 @@ export async function savePaymentPromise(clientId, promiseDate, amount, notes) {
     paymentPromise: updatedPromise,
     communicationLogs: arrayUnion(newLog),
   });
+  // Every promise is kept on record; a nightly job marks it kept or broken.
+  try {
+    await addDoc(collection(db, "paymentPromises"), {
+      clientId,
+      ...updatedPromise,
+      status: "open",
+    });
+  } catch (e) {
+    console.warn("Could not record the promise history:", e.message);
+  }
 
   return { updatedPromise, newLog };
 }
@@ -131,12 +144,12 @@ export default function PaymentPromise({ client, setClient }) {
     if (!d) return false;
     const todayMidnight = new Date();
     todayMidnight.setHours(0, 0, 0, 0);
-    return new Date(d) < todayMidnight;
+    return asDate(d) < todayMidnight;
   })();
 
   const isUpcoming =
     client?.paymentPromise?.date &&
-    new Date(client.paymentPromise.date) >= new Date();
+    asDate(client.paymentPromise.date) >= new Date();
 
   const currentPromise = client?.paymentPromise;
 
@@ -359,7 +372,7 @@ export default function PaymentPromise({ client, setClient }) {
                   textTransform: "none",
                   fontWeight: 700,
                   bgcolor: PERSIAN_GREEN,
-                  "&:hover": { bgcolor: "#00877c" },
+                  "&:hover": { bgcolor: "#12867D" },
                 }}
               >
                 {isEditing ? "Save Changes" : "Save Promise"}
@@ -382,7 +395,7 @@ export default function PaymentPromise({ client, setClient }) {
         >
           <Typography variant="body2">
             <strong>
-              {new Date(currentPromise.date).toLocaleDateString()}
+              {formatDate(currentPromise.date)}
             </strong>{" "}
             – ${Number(currentPromise.amount).toLocaleString()} – still
             pending.

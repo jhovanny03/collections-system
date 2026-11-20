@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import React, { useState } from "react";
 import {
   Box,
@@ -47,7 +48,7 @@ const LetterGenerator = ({ client }) => {
   });
 
   const formatDateLong = (date) =>
-    new Date(date).toLocaleDateString("en-US", {
+    asDate(date).toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
       day: "numeric",

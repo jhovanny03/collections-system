@@ -1,4 +1,5 @@
 // src/FollowUps/Calendar/CalendarWeekView.js
+import { asDate } from "../../utils/dates";
 
 // Import React hooks for state, refs and effects
 import React, { useState, useRef, useEffect } from 'react';
@@ -229,7 +230,7 @@ export default function CalendarWeekView({ onPromise }) {
               <Box display="flex" alignItems="center" mb={1}>
                 <CalendarTodayIcon fontSize="small" sx={{ mr: 1 }} />
                 <Typography variant="body2">
-                  {format(new Date(detailEvent.start), "EEEE d MMMM ")}    
+                  {format(asDate(detailEvent.start), "EEEE d MMMM ")}    
                 </Typography>
               </Box>
               {/* Description field */}

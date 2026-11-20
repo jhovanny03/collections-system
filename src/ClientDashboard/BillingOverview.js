@@ -19,6 +19,9 @@ import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
 import PaidIcon from "@mui/icons-material/Paid";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
+import { asDate, formatDate, LONG_DATE } from "../utils/dates";
+import { installmentPayments, clientPosition, planLedger } from "../billing/ledger";
+import { planViews } from "../billing/plans";
 
 export default function BillingOverview({ client }) {
   const status = client?.status || "active"; // "active" | "paused" | "closed"
@@ -27,7 +30,7 @@ export default function BillingOverview({ client }) {
 
   // ---------- helpers ----------
   const toDate = (raw) =>
-    raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+    raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw);
   const money = (n) =>
     `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}`;
   const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
@@ -68,7 +71,7 @@ export default function BillingOverview({ client }) {
 
   // ---------- schedule + logic ----------
   const expectedAnchor = client.expectedAnchor
-    ? new Date(client.expectedAnchor)
+    ? asDate(client.expectedAnchor)
     : null;
   const anchorDate = expectedAnchor || toDate(rawStart || new Date());
   const firstDueDate = new Date(
@@ -87,21 +90,21 @@ export default function BillingOverview({ client }) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   const getInstallmentAmountForDate = (date) => {
     for (const s of schedule) {
-      const sStart = new Date(s.start);
-      const sEnd = new Date(s.end);
+      const sStart = asDate(s.start);
+      const sEnd = asDate(s.end);
       if (date >= sStart && date <= sEnd) return Number(s.amount);
     }
     return 500; // default
   };
 
   // ✅ EXCLUDE the initial (down) payment from installments: ONLY strictly after initialPaymentDate
-  const paymentsAfterInitial = allPayments.filter(
-    (p) => new Date(p.date) > new Date(client.initialPaymentDate)
-  );
+  // Same rule as everywhere else (src/billing/ledger.js): the initial payment only takes
+  // what it is owed; anything else paid that day counts toward installments.
+  const paymentsAfterInitial = allPayments.length ? installmentPayments(client) : [];
   const paymentPool = paymentsAfterInitial.map((p) => ({
     amount: Number(p.amount),
     date: p.date,
@@ -119,7 +122,7 @@ export default function BillingOverview({ client }) {
           )
         : today;
 
-    const cursor = new Date(firstDueDate);
+    const cursor = asDate(firstDueDate);
     let expectedAccum = 0; // running total of expected installments
     while (cursor <= cutoff) {
       if (!monthIsSkipped(cursor)) {
@@ -127,7 +130,7 @@ export default function BillingOverview({ client }) {
         if (expectedAccum >= collectibleCap) break;
         if (expectedAccum + amt > collectibleCap) break;
 
-        monthsUpToCutoff.push(new Date(cursor));
+        monthsUpToCutoff.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);
@@ -157,7 +160,7 @@ export default function BillingOverview({ client }) {
   if (!isClosed && !isPaused) {
     let leftover = paymentPool.reduce((s, p) => s + (p.amount || 0), 0);
     if (leftover > 0) {
-      const futureCursor = new Date(today);
+      const futureCursor = asDate(today);
       futureCursor.setDate(15);
       if (futureCursor <= today) futureCursor.setMonth(futureCursor.getMonth() + 1);
       let guard = 0;
@@ -177,15 +180,19 @@ export default function BillingOverview({ client }) {
     }
   }
 
-  const amountDue = isClosed
-    ? 0
-    : dueMonths.reduce((sum, m) => sum + m.amount, 0);
-
-  const computedRemaining = Math.max(
+  // Owed and balance come from the installment ledger, so this card matches the header.
+  const position = clientPosition(client, today);
+  dueMonths.splice(
     0,
-    invoiceEffective - initialPayment - validTotalPaid
+    dueMonths.length,
+    ...planViews(client)
+      .flatMap((v) => planLedger(v, today).months)
+      .filter((m) => m.paid < m.amount - 0.005)
+      .sort((a, b) => a.due - b.due)
+      .map((m) => ({ label: labelFor(m.due), amount: m.amount - m.paid }))
   );
-  const remainingBalance = isClosed ? 0 : computedRemaining;
+  const amountDue = isClosed ? 0 : position.owedNow;
+  const remainingBalance = isClosed ? 0 : position.balance;
 
   // ✅ If fully paid, clear due months
   if (remainingBalance <= 0) {
@@ -210,7 +217,7 @@ export default function BillingOverview({ client }) {
     }
     return paid >= due;
   };
-  const firstUnpaid = new Date(firstDueDate);
+  const firstUnpaid = asDate(firstDueDate);
   let guardSim = 0;
   while (
     !isClosed &&
@@ -225,8 +232,8 @@ export default function BillingOverview({ client }) {
   // ---------- project future months ----------
   const futureMonths = [];
   if (!isClosed && !isPaused && remainingBalance > 0) {
-    let futureStartDate = new Date(firstUnpaid);
-    const cutoff = new Date(futureStartDate);
+    let futureStartDate = asDate(firstUnpaid);
+    const cutoff = asDate(futureStartDate);
     cutoff.setFullYear(cutoff.getFullYear() + 3);
     let futureAccum = 0;
     let guard = 0;
@@ -283,11 +290,7 @@ export default function BillingOverview({ client }) {
     const installmentPays = paymentsAfterInitial;
     if (!installmentPays.length) {
       if (client.initialPaymentDate && client.initialPaymentAmount) {
-        const d = new Date(client.initialPaymentDate).toLocaleDateString("default", {
-          year: "numeric",
-          month: "long",
-          day: "numeric",
-        });
+        const d = formatDate(client.initialPaymentDate, LONG_DATE);
         return `No installments recorded — Initial on ${d} – $${Number(
           client.initialPaymentAmount
         ).toLocaleString()}`;
@@ -295,13 +298,9 @@ export default function BillingOverview({ client }) {
       return "No installments recorded";
     }
     const latest = installmentPays.reduce((latest, p) =>
-      new Date(p.date) > new Date(latest.date) ? p : latest
+      asDate(p.date) > asDate(latest.date) ? p : latest
     );
-    const dateStr = new Date(latest.date).toLocaleDateString("default", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
+    const dateStr = formatDate(latest.date, LONG_DATE);
     return `${dateStr} – $${Number(latest.amount).toLocaleString()}`;
   };
 
@@ -327,6 +326,8 @@ export default function BillingOverview({ client }) {
       value:
         isClosed || !dueMonths.length
           ? "None"
+          : dueMonths[0].label === dueMonths[dueMonths.length - 1].label
+          ? dueMonths[0].label // one month: say it once ("November 2026")
           : `${dueMonths[0].label} – ${dueMonths[dueMonths.length - 1].label}`,
       icon: <CalendarMonthIcon />,
     },

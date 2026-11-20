@@ -1,206 +1,124 @@
-/*// src/auth/AuthProvider.jsx
-import React, { createContext, useState, useEffect } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
-import { authService } from '../services/authService';
-import { auth, db } from '../firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-
-const AuthContext = createContext();
-
-const MASTER_ROLE = 'master';
-
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // Cargar perfil desde Firestore
-        const profileRef = doc(db, 'users', firebaseUser.uid);
-        const profileSnap = await getDoc(profileRef);
-        let profileData;
-
-        if (profileSnap.exists()) {
-          profileData = profileSnap.data();
-          
-          if (!profileData.role) {
-            profileData.role = MASTER_ROLE;
-            await setDoc(profileRef, { role: MASTER_ROLE }, { merge: true });
-          }
-          
-        } else {
-          // Si no hay perfil en Firestore, usamos datos básicos de Auth
-          profileData = {
-            email: firebaseUser.email,
-            role: MASTER_ROLE,
-            firstName: '',
-            lastName: '',
-            createdAt: serverTimestamp(),
-          };
-          await setDoc(profileRef, profileData);
-          
-        }
-        setUser({
-        uid: firebaseUser.uid,
-        email: (firebaseUser.email || '').toLowerCase(), // 💡 normalizamos
-        ...profileData,
-      });
-      } else {
-        setUser(null);
-      }
-      setLoading(false);
-    });
-    return unsubscribe;
-  }, []);
-
-  const register = (email, password) => authService.register(email, password);
-  const login    = (email, password) => authService.login(email, password);
-  const logout   = ()              => authService.logout();
-
-  return (
-    <AuthContext.Provider value={{ user, loading, register, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export default AuthContext; */
-
 // src/auth/AuthProvider.jsx
-import React, { createContext, useEffect, useMemo, useState, useCallback } from 'react';
-// REMOVE: signOut no se usa porque ya ocupas authService.logout()
-// import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { onAuthStateChanged } from 'firebase/auth';
-import { authService } from '../services/authService';
-import { auth, db } from '../firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-
-// ADD: traemos BYPASS_EMAIL y helpers centralizados
+// Signed-in user = Firebase Auth account + users/{uid} profile (role, name).
+// Permission helpers come from ./permissions so every page uses the same rules.
+import React, { createContext, useEffect, useMemo, useState, useCallback } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { authService } from "../services/authService";
+import { auth, db } from "../firebase";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import {
   BYPASS_EMAIL,
+  roleOf,
+  displayNameOf,
   isMaster as isMasterFn,
   isAdmin as isAdminFn,
   isEditor as isEditorFn,
   isBasic as isBasicFn,
   isEditorOrHigher as isEditorOrHigherFn,
+  isLeadOrHigher as isLeadOrHigherFn,
   canManageUsers as canManageUsersFn,
 } from "./permissions";
+import { setActor } from "./actor";
 
-// CHANGED: el contexto ahora documenta también los helpers de permisos
 const AuthContext = createContext({
   user: null,
   loading: true,
-  // auth actions
-  register: async (_e, _p) => {},
-  login: async (_e, _p) => {},
+  disabledNotice: false,
+  register: async () => {},
+  login: async () => {},
   logout: async () => {},
-  // helpers de permisos
   isMaster: () => false,
   isAdmin: () => false,
   isEditor: () => false,
   isBasic: () => true,
   isEditorOrHigher: () => false,
+  isLeadOrHigher: () => false,
   canManageUsers: () => false,
 });
-
-const MASTER_ROLE = 'master';
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Set when a disabled account tries to sign in (shown on the login page).
+  const [disabledNotice, setDisabledNotice] = useState(false);
 
-  // ADD: acciones auth (las exponemos en el context)
-  const register     = useCallback((email, password) => authService.register(email, password), []);
-  const login        = useCallback((email, password) => authService.login(email, password), []);
-  const logout       = useCallback(() => authService.logout(), []);
+  const register = useCallback((email, password) => authService.register(email, password), []);
+  const login = useCallback((email, password) => {
+    setDisabledNotice(false);
+    return authService.login(email, password);
+  }, []);
+  const logout = useCallback(() => authService.logout(), []);
   const loginWithGoogle = useCallback(() => authService.loginWithGoogle(), []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
         if (!firebaseUser) {
+          setActor(null);
           setUser(null);
           return;
         }
-
-        const email = (firebaseUser.email || '').toLowerCase(); // CHANGED: normalizamos
-        const profileRef = doc(db, 'users', firebaseUser.uid);
+        const email = (firebaseUser.email || "").toLowerCase();
+        const isOwner = email === BYPASS_EMAIL.toLowerCase();
+        const profileRef = doc(db, "users", firebaseUser.uid);
         const profileSnap = await getDoc(profileRef);
 
         let profileData;
         if (profileSnap.exists()) {
           profileData = profileSnap.data() || {};
-
-          // CHANGED: si no hay role, NO ponemos master por defecto — evaluamos por email
           if (!profileData.role) {
-            const defaultRole =
-              email === BYPASS_EMAIL.toLowerCase() ? MASTER_ROLE : 'basic';
+            const defaultRole = isOwner ? "master" : "basic";
             await setDoc(profileRef, { role: defaultRole }, { merge: true });
             profileData.role = defaultRole;
           }
         } else {
-          // CHANGED: crear perfil con role seguro (master solo para BYPASS)
-          const defaultRole =
-            email === BYPASS_EMAIL.toLowerCase() ? MASTER_ROLE : 'basic';
-
-          profileData = {
-            email,
-            role: defaultRole,
-            firstName: '',
-            lastName: '',
-            createdAt: serverTimestamp(),
-          };
+          profileData = { email, role: isOwner ? "master" : "basic", firstName: "", lastName: "", createdAt: serverTimestamp() };
           await setDoc(profileRef, profileData);
         }
 
-        // CHANGED: armamos el usuario combinado (Auth + perfil)
-        setUser({
-          uid: firebaseUser.uid,
-          email,
-          ...profileData,
-        });
+        // A disabled account cannot use the app (the owner can never be locked out).
+        if (profileData.disabled === true && !isOwner) {
+          setDisabledNotice(true);
+          setUser(null);
+          await authService.logout();
+          return;
+        }
+
+        const merged = { uid: firebaseUser.uid, email, displayName: firebaseUser.displayName || "", ...profileData };
+        const full = { ...merged, role: roleOf(merged), name: displayNameOf(merged) };
+        setActor(full);
+        setUser(full);
       } catch (e) {
-        console.error("AuthProvider onAuthStateChanged error:", e);
-        // Fallback mínimo para no romper IU
-        setUser({
-          uid: firebaseUser?.uid,
-          email: (firebaseUser?.email || '').toLowerCase(),
-          role: 'basic',
-        });
+        console.error("Could not load the user profile:", e);
+        setUser({ uid: firebaseUser?.uid, email: (firebaseUser?.email || "").toLowerCase(), role: "basic" });
       } finally {
         setLoading(false);
       }
     });
-
     return unsubscribe;
   }, []);
 
-  // ADD: helpers de permisos “amarrados” al usuario actual
-  const value = useMemo(() => {
-    return {
+  const value = useMemo(
+    () => ({
       user,
       loading,
+      disabledNotice,
       register,
       login,
       logout,
       loginWithGoogle,
-      // helpers
       isMaster: () => isMasterFn(user),
       isAdmin: () => isAdminFn(user),
       isEditor: () => isEditorFn(user),
       isBasic: () => isBasicFn(user),
       isEditorOrHigher: () => isEditorOrHigherFn(user),
+      isLeadOrHigher: () => isLeadOrHigherFn(user),
       canManageUsers: () => canManageUsersFn(user),
-    };
-  }, [user, loading, register, login, logout]);
-
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
+    }),
+    [user, loading, disabledNotice, register, login, logout, loginWithGoogle]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export default AuthContext;
-

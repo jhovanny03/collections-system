@@ -1,4 +1,5 @@
 // src/Level10/MonthBar.jsx
+import { asDate } from "../utils/dates";
 import React, { useState } from "react";
 import {
   Stack,
@@ -43,7 +44,7 @@ const ymd = (d) =>
   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 const fmtNice = (isoYmd) => {
-  const d = new Date(`${isoYmd}T00:00:00`);
+  const d = asDate(`${isoYmd}T00:00:00`);
   return d.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -75,7 +76,7 @@ export default function MonthBar({
   };
 
   const shiftMeetingBy = (days) => {
-    const d = new Date(`${meetingDate}T00:00:00`);
+    const d = asDate(`${meetingDate}T00:00:00`);
     d.setDate(d.getDate() + days);
     // keep month UI in sync if crossing months
     setMonth(ym(d));

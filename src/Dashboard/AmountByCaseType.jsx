@@ -1,4 +1,5 @@
 // src/Dashboard/AmountByCaseType.jsx
+import { asDate } from "../utils/dates";
 import React, { useEffect, useMemo, useState } from "react";
 import DashboardCard from "./DashboardCard";
 import { BarChart } from "@mui/x-charts/BarChart";
@@ -11,14 +12,14 @@ import { db } from "../firebase";
 // Parse Firestore Timestamp or plain value into Date
 const parseMaybeTs = (raw) =>
   raw && raw.seconds
-    ? new Date(raw.seconds * 1000)
+    ? asDate(raw.seconds * 1000)
     : raw
-    ? new Date(raw)
+    ? asDate(raw)
     : null;
 
 // Normalize to the 15th (due day) before comparing to schedule tiers
 const toDueMidMonth = (dateLike) => {
-  const d = dateLike instanceof Date ? dateLike : new Date(dateLike);
+  const d = dateLike instanceof Date ? dateLike : asDate(dateLike);
   return new Date(d.getFullYear(), d.getMonth(), 15);
 };
 
@@ -33,11 +34,11 @@ const getInstallmentAmountForDate = (client, date) => {
   const dueMid = toDueMidMonth(date);
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   for (const s of schedule) {
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (dueMid >= sStart && dueMid <= sEnd) {
       return Number(s.amount || 0);
     }
@@ -97,7 +98,7 @@ const buildClientDueMonths = (client) => {
 
   // Anchor: if expectedAnchor exists (resume point), use it, else firstInstallmentDate
   const expectedAnchor = client.expectedAnchor
-    ? new Date(client.expectedAnchor)
+    ? asDate(client.expectedAnchor)
     : null;
   const startDate = expectedAnchor || parseMaybeTs(rawStart);
   if (!(startDate instanceof Date) || isNaN(startDate)) return [];
@@ -108,7 +109,7 @@ const buildClientDueMonths = (client) => {
   let cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
 
   for (let i = 0; i < planMonths; i++) {
-    const m = new Date(cur);
+    const m = asDate(cur);
 
     if (monthAccrues(client, m) && !isSkippedMonth(client, m)) {
       const expected = getInstallmentAmountForDate(client, m);
@@ -134,17 +135,17 @@ const buildClientDueMonths = (client) => {
 const allocatePaymentsToDueMonths = (client, dueMonths) => {
   // Only payments made AFTER initialPaymentDate count toward installments
   const ipd = client.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
 
   const payments = (client.payments || [])
     .filter((p) => {
-      const d = new Date(p.date);
+      const d = asDate(p.date);
       return !isNaN(d) && (!ipd || d > ipd);
     })
     .map((p) => ({
       amount: Number(p.amount || 0),
-      date: new Date(p.date),
+      date: asDate(p.date),
     }))
     .sort((a, b) => a.date - b.date);
 

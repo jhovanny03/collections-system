@@ -32,6 +32,7 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import db from "../firebase";
+import { asDate, formatDate } from "../utils/dates";
 
 // ---------- helpers ----------
 const toMoney = (n) =>
@@ -39,8 +40,8 @@ const toMoney = (n) =>
 
 const yyyyMmDd = (d) => d.toISOString().slice(0, 10);
 
-const startOfDay = (yyyy_mm_dd) => new Date(`${yyyy_mm_dd}T00:00:00`);
-const endOfDay = (yyyy_mm_dd) => new Date(`${yyyy_mm_dd}T23:59:59.999`);
+const startOfDay = (yyyy_mm_dd) => asDate(`${yyyy_mm_dd}T00:00:00`);
+const endOfDay = (yyyy_mm_dd) => asDate(`${yyyy_mm_dd}T23:59:59.999`);
 
 const addDays = (d, days) => new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
 
@@ -207,7 +208,7 @@ export default function PaymentHistoryReport() {
 
       try {
         if (!startDate || !endDate) throw new Error("Missing date range.");
-        if (new Date(startDate) > new Date(endDate)) {
+        if (asDate(startDate) > asDate(endDate)) {
           throw new Error("Start date cannot be after end date.");
         }
 
@@ -287,9 +288,7 @@ export default function PaymentHistoryReport() {
     const lines = [
       headers.map(toCsvValue).join(","),
       ...filteredRows.map((r) => {
-        const paymentDate = r.paymentDate
-          ? new Date(r.paymentDate).toLocaleDateString()
-          : "";
+        const paymentDate = formatDate(r.paymentDate, undefined, "");
 
         const amount = Number(r.amount || 0).toFixed(2);
 
@@ -551,11 +550,7 @@ export default function PaymentHistoryReport() {
                       <TableCell>
                         <Chip
                           size="small"
-                          label={
-                            r.paymentDate
-                              ? new Date(r.paymentDate).toLocaleDateString()
-                              : "—"
-                          }
+                          label={formatDate(r.paymentDate)}
                         />
                       </TableCell>
                       <TableCell>{toMoney(r.amount)}</TableCell>

@@ -1,4 +1,6 @@
 // src/Dashboard/Dashboard.js
+import { withPlans } from "../billing/plans";
+import { asDate } from "../utils/dates";
 import React, { useEffect, useMemo, useState } from "react";
 import { Container, Grid, Box } from "@mui/material";
 import { collection, getDocs } from "firebase/firestore";
@@ -20,7 +22,7 @@ import UpcomingPromisesList from "./UpcomingPromisesList.jsx";
 const DUE_DAY = 15;
 
 const toDate = (v) =>
-  v?.toDate?.() ? v.toDate() : isNaN(new Date(v)) ? null : new Date(v);
+  v?.toDate?.() ? v.toDate() : isNaN(asDate(v)) ? null : asDate(v);
 
 const startOfMonth = (d) =>
   new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
@@ -43,8 +45,8 @@ const getInstallmentAmountForDate = (schedule, date) => {
   if (!Array.isArray(schedule) || schedule.length === 0) return 500;
   for (let i = 0; i < schedule.length; i++) {
     const s = schedule[i];
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
   return 500;
@@ -79,7 +81,14 @@ function getCollectibleCap(client) {
  * - Pause rule: paused BEFORE 15th => current month not included; paused ON/AFTER 15th => included
  * - Closed => 0 due
  */
-function computeBillingSnapshot(client, now = new Date()) {
+// Plan-aware: cases with several installment plans are computed plan by plan and
+// combined (src/billing/plans.js); single-plan clients go straight through.
+function computeBillingSnapshot(client, ...rest) {
+  if (!client) return computeBillingSnapshotSinglePlan(client, ...rest);
+  return withPlans(client, (c) => computeBillingSnapshotSinglePlan(c, ...rest));
+}
+
+function computeBillingSnapshotSinglePlan(client, now = new Date()) {
   const status = (client?.status || "active").toLowerCase();
   const isClosed = status === "closed";
   const isPaused = status === "paused";
@@ -119,11 +128,11 @@ function computeBillingSnapshot(client, now = new Date()) {
 
   const schedule = (client?.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   // Build months up to CUTOFF but stop when expected sum would exceed CAP
   const months = [];
-  const cursor = new Date(firstDueDate);
+  const cursor = asDate(firstDueDate);
   let expectedAccum = 0;
 
   if (!isClosed) {
@@ -132,7 +141,7 @@ function computeBillingSnapshot(client, now = new Date()) {
         const amt = getInstallmentAmountForDate(schedule, cursor);
         if (expectedAccum >= collectibleCap) break;
         if (expectedAccum + amt > collectibleCap) break;
-        months.push(new Date(cursor));
+        months.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);
@@ -249,7 +258,7 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   // Build months up to monthEnd with strict CAP gate
   const months = [];
@@ -374,7 +383,7 @@ function ytdOutstandingForClient(client, asOf = new Date()) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   const skipSet = new Set((client?.skipMonths || []).map(String));
   const monthIsSkipped = (d) => skipSet.has(ymKey(d));
@@ -397,7 +406,7 @@ function ytdOutstandingForClient(client, asOf = new Date()) {
 
   // Build expected months up to cutoff (15th rule), CAP-gated
   const months = [];
-  let cursor = new Date(firstDue);
+  let cursor = asDate(firstDue);
   let expectedAccum = 0;
 
   while (cursor <= cutoff) {

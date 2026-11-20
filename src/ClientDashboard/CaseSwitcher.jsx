@@ -1,4 +1,5 @@
 // src/ClientDashboard/CaseSwitcher.jsx
+import { asDate } from "../utils/dates";
 //
 // Manages multiple cases (retainers) per client.
 // - Tabs to switch between current active case and archived (closed) cases.
@@ -32,6 +33,9 @@ import { doc, updateDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import db from "../firebase";
 import BillingOverview from "./BillingOverview";
+import { planViews } from "../billing/plans";
+import { FEATURES } from "../config/features";
+import { getActor } from "../auth/actor";
 
 const CASE_TYPES = [
   "VAWA SPOUSE",
@@ -86,8 +90,10 @@ export default function CaseSwitcher({ client, setClient }) {
         caseType: selectedCaseData.caseType,
         // Archived cases always show as closed in BillingOverview.
         status: "closed",
+        plans: selectedCaseData.plans || [],
       }
-    : client;
+    : // With several plans, Billing Overview describes Plan 1 (the Plans panel shows all).
+      planViews(client)[0];
 
   const openDialog = () => {
     setArchiveLabel(client.caseType || "Current Case");
@@ -111,7 +117,7 @@ export default function CaseSwitcher({ client, setClient }) {
     try {
       const auth = getAuth();
       const user = auth.currentUser;
-      const by = user?.displayName || user?.email || "System";
+      const by = getActor().name;
       const now = new Date().toISOString();
 
       const archivedCase = {
@@ -135,6 +141,10 @@ export default function CaseSwitcher({ client, setClient }) {
         invoiceUpdatedBy: client.invoiceUpdatedBy ?? null,
         invoiceUpdatedAt: client.invoiceUpdatedAt ?? null,
         paymentPromise: client.paymentPromise ?? null,
+        // Multi-plan cases (Case Setup): keep the plans and invoice tags with the case.
+        plans: client.plans || [],
+        invoiceRoles: client.invoiceRoles || {},
+        installmentAmount: client.installmentAmount ?? null,
 
         status: "paid_in_full",
         archivedAt: now,
@@ -159,6 +169,9 @@ export default function CaseSwitcher({ client, setClient }) {
         invoiceUpdatedBy: null,
         invoiceUpdatedAt: null,
         paymentPromise: null,
+        plans: [],
+        invoiceRoles: {},
+        installmentAmount: null,
       };
 
       const clientRef = doc(db, "clients", client.id);
@@ -241,7 +254,7 @@ export default function CaseSwitcher({ client, setClient }) {
           </Typography>
         )}
 
-        {hasCurrentInvoice && (
+        {hasCurrentInvoice && FEATURES.addNewCase && (
           <Button
             variant="outlined"
             startIcon={<AddIcon />}
@@ -260,7 +273,7 @@ export default function CaseSwitcher({ client, setClient }) {
           Viewing completed case:{" "}
           <strong>{selectedCaseData.caseLabel || selectedCaseData.caseType}</strong>
           {selectedCaseData.archivedAt
-            ? ` — paid in full ${new Date(selectedCaseData.archivedAt).toLocaleDateString()}`
+            ? ` — paid in full ${asDate(selectedCaseData.archivedAt).toLocaleDateString()}`
             : ""}
           . This is read-only. The invoice, payment, and settings sections below
           apply to the <strong>current active case</strong>.

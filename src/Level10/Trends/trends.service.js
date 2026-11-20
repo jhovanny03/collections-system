@@ -1,4 +1,5 @@
 // src/Level10/Trends/trends.service.js
+import { asDate } from "../../utils/dates";
 // Centralized calculators for the Trends module.
 // NOTE: Pure computations only. No React here.
 // We rely on your canonical math by importing deriveClientAging.
@@ -9,7 +10,7 @@ import { deriveClientAging } from "../services/metrics.compute";
 // ---------- Small utils ----------
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-const toDate = (raw) => (raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw));
+const toDate = (raw) => (raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw));
 
 const isSameYMD = (a, b) =>
   a.getFullYear() === b.getFullYear() &&
@@ -22,7 +23,7 @@ function startOfDay(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 }
 function addDays(d, n) {
-  const x = new Date(d);
+  const x = asDate(d);
   x.setDate(x.getDate() + n);
   return x;
 }

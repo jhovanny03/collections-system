@@ -1,345 +1,180 @@
-// src/Layout/Sidebar.jsx
-import React, { useMemo, useState } from "react";
-import {
-  Drawer,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Box,
-  useTheme,
-  Divider,
-  Tooltip,
-  Badge,
-  IconButton,
-  ListSubheader,
-} from "@mui/material";
+// src/Layout/Sidebar.js
+// Main navigation, grouped by what people come to do:
+//   Home / Clients · Work (billing team) · Insights · Team (leads) · Admin
+// Work items show live counts of what is waiting (from WorkQueueProvider).
+import React from "react";
+import { Drawer, List, ListItemButton, ListItemIcon, ListItemText, Box, Tooltip, IconButton, Typography, Badge } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import {
-  PersonAdd as PersonAddIcon,
-  People as PeopleIcon,
-  CalendarToday as CalendarTodayIcon,
-  Repeat as RepeatIcon,
-  BarChart as BarChartIcon,
-  Person as PersonIcon,
-  Assessment as AssessmentIcon,
-  ChevronLeft as ChevronLeftIcon,
-  ChevronRight as ChevronRightIcon,
-} from "@mui/icons-material";
-import { NavLink, Link } from "react-router-dom";
+import SpaceDashboardRounded from "@mui/icons-material/SpaceDashboardRounded";
+import PeopleAltRounded from "@mui/icons-material/PeopleAltRounded";
+import PhoneInTalkRounded from "@mui/icons-material/PhoneInTalkRounded";
+import EventAvailableRounded from "@mui/icons-material/EventAvailableRounded";
+import PlaylistAddCheckRounded from "@mui/icons-material/PlaylistAddCheckRounded";
+import RuleRounded from "@mui/icons-material/RuleRounded";
+import InsightsRounded from "@mui/icons-material/InsightsRounded";
+import GroupsRounded from "@mui/icons-material/GroupsRounded";
+import ManageAccountsRounded from "@mui/icons-material/ManageAccountsRounded";
+import PersonAddAlt1Rounded from "@mui/icons-material/PersonAddAlt1Rounded";
+import ChevronLeftRounded from "@mui/icons-material/ChevronLeftRounded";
+import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
+import { NavLink, Link, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/useAuth";
-import { motion } from "framer-motion";
+import { FEATURES } from "../config/features";
+import { useWorkQueue } from "../data/WorkQueueProvider";
+import { BRAND } from "../theme/brand";
+import { ReactComponent as LogoMono } from "../assets/rahman-law-logo-mono.svg";
 
-// ✅ New: your logo asset
-import firmLogo from "../assets/logo.png";
+export const DRAWER_W = 248;
+export const COLLAPSED_W = 68;
 
-const DRAWER_W = 240;
-const COLLAPSED_W = 64;
-const LS_KEY = "sidebar_open_v1";
-
-// 🎨 Executive Cool Palette
-const FEDERAL_BLUE = "#0b3a75";
-const PERSIAN_GREEN = "#00a693";
-const SYRACUSE_RED = "#d44500";
-
-// Framer Motion variants
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: { when: "beforeChildren", staggerChildren: 0.03 },
-  },
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 6 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.18 } },
-};
-
-export default function Sidebar({
-  open: openProp,
-  onToggle,
-  badges = { promised: 0, followUps: 0 },
-}) {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === "dark";
-  const { loading, isEditorOrHigher, canManageUsers } = useAuth();
-
-  // Persistent open state
-  const [internalOpen, setInternalOpen] = useState(() => {
-    try {
-      const stored = localStorage.getItem(LS_KEY);
-      return stored ? stored === "1" : true;
-    } catch {
-      return true;
-    }
+function useSections() {
+  const { isEditorOrHigher, isLeadOrHigher, canManageUsers } = useAuth();
+  const { counts } = useWorkQueue();
+  const s = [
+    {
+      title: null,
+      items: [
+        { text: "Home", icon: <SpaceDashboardRounded />, to: "/dashboard", hint: "Today at a glance and what needs attention" },
+        { text: "Clients", icon: <PeopleAltRounded />, to: "/clients", match: ["/clients", "/client/"], hint: "Search clients and open their profile" },
+      ],
+    },
+  ];
+  if (isEditorOrHigher()) {
+    s.push({
+      title: "Work",
+      items: [
+        { text: "Follow-ups", icon: <PhoneInTalkRounded />, to: "/follow-ups", badge: counts.followUpsOpen, hint: "Clients who missed this month's payment" },
+        { text: "Promised payments", icon: <EventAvailableRounded />, to: "/promised-payments", badge: counts.promisesToday, hint: "Promises due today and coming up" },
+        { text: "Case Setup", icon: <PlaylistAddCheckRounded />, to: "/case-setup", badge: counts.caseSetupTotal, hint: "New MyCase cases, plans to set and links to fix" },
+        { text: "MyCase Review", icon: <RuleRounded />, to: "/mycase-review", badge: counts.reviewOpen, hint: "MyCase payments the sync could not place on its own" },
+        ...(FEATURES.createClient ? [{ text: "Create client", icon: <PersonAddAlt1Rounded />, to: "/create-client" }] : []),
+      ],
+    });
+  }
+  s.push({
+    title: "Insights",
+    items: [
+      { text: "Reports", icon: <InsightsRounded />, to: "/reports", hint: "Past due, collections, payments, MyCase" },
+    ],
   });
-  const open = openProp ?? internalOpen;
-  const setOpen = (v) => {
-    if (onToggle) return onToggle();
-    setInternalOpen(v);
-    try {
-      localStorage.setItem(LS_KEY, v ? "1" : "0");
-    } catch {}
-  };
-  const toggle = () => setOpen(!open);
+  if (isLeadOrHigher()) {
+    s.push({ title: "Team", items: [{ text: "Team performance", icon: <GroupsRounded />, to: "/team", hint: "How each team member is doing" }] });
+  }
+  if (canManageUsers()) {
+    s.push({ title: "Admin", items: [{ text: "Users & roles", icon: <ManageAccountsRounded />, to: "/admin/users", match: ["/admin", "/register"], hint: "Add people and set what they can do" }] });
+  }
+  return s;
+}
 
-  // Sections
-  const commonItems = [
-    { text: "Dashboard", icon: <BarChartIcon />, to: "/dashboard" },
-    { text: "View Clients", icon: <PeopleIcon />, to: "/clients" },
-    { text: "Reports", icon: <AssessmentIcon />, to: "/reports" },
-    // ✅ Added: Level 10 Meeting route (icon reused to avoid new imports)
-    { text: "Level 10 Meeting", icon: <AssessmentIcon />, to: "/level10" },
-  ];
-  const editorItems = [
-    { text: "Create Client", icon: <PersonAddIcon />, to: "/create-client" },
-    {
-      text: "Promised Payments",
-      icon: <CalendarTodayIcon />,
-      to: "/promised-payments",
-      badge: badges.promised || 0,
-    },
-    {
-      text: "Follow Ups",
-      icon: <RepeatIcon />,
-      to: "/follow-ups",
-      badge: badges.followUps || 0,
-    },
-  ];
-  const adminItems = [{ text: "Register User", icon: <PersonIcon />, to: "/register" }];
-
-  const sections = useMemo(() => {
-    const s = [{ title: null, items: commonItems }];
-    if (isEditorOrHigher()) s.push({ title: "Operations", items: editorItems });
-    if (canManageUsers()) s.push({ title: "Admin", items: adminItems });
-    return s;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditorOrHigher, canManageUsers, badges.promised, badges.followUps]);
-
-  if (loading) return null;
-
-  // 🎨 Executive Cool gradient & colors
-  const gradientBg = isDark
-    ? `linear-gradient(180deg, ${FEDERAL_BLUE} 0%, ${PERSIAN_GREEN} 100%)`
-    : `linear-gradient(180deg, ${FEDERAL_BLUE} 0%, ${PERSIAN_GREEN} 100%)`;
-
-  const textColor = isDark ? "rgba(240,245,255,0.95)" : "#ffffff";
-  const subText = isDark ? "rgba(220,230,255,0.75)" : "rgba(255,255,255,0.8)";
-  const dividerColor = isDark
-    ? "rgba(255,255,255,0.16)"
-    : "rgba(255,255,255,0.25)";
-  const hoverBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.08)";
-  const activeBg = isDark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.10)";
-  const accent = SYRACUSE_RED; // 🟠 Active accent (warm contrast)
-  const accentGlow = `0 0 12px ${alpha(accent, 0.5)}`;
-
-  // ✅ Shared logo filter to make it pop
-  const logoFilter = "brightness(1.15) drop-shadow(0 0 8px rgba(255,255,255,0.65))";
+export default function Sidebar({ open, onToggle }) {
+  const sections = useSections();
+  const location = useLocation();
+  const width = open ? DRAWER_W : COLLAPSED_W;
+  const isActive = (item) => (item.match || [item.to]).some((p) => location.pathname === p || location.pathname.startsWith(p.endsWith("/") ? p : `${p}/`));
 
   return (
     <Drawer
-      variant="persistent"
-      open={open}
-      PaperProps={{
-        sx: {
-          width: open ? DRAWER_W : COLLAPSED_W,
-          boxSizing: "border-box",
-          backgroundImage: gradientBg,
-          color: textColor,
-          borderRight: "1px solid rgba(255,255,255,0.1)",
-          transition: theme.transitions.create("width", {
-            easing: theme.transitions.easing.easeInOut,
-            duration: theme.transitions.duration.enteringScreen,
-          }),
+      variant="permanent"
+      sx={{
+        width,
+        flexShrink: 0,
+        transition: "width .2s ease",
+        "& .MuiDrawer-paper": {
+          width,
           overflowX: "hidden",
+          transition: "width .2s ease",
+          border: 0,
+          color: "#fff",
+          background: `linear-gradient(180deg, ${BRAND.blue} 0%, ${BRAND.blueDark} 100%)`,
+          display: "flex",
+          flexDirection: "column",
         },
-        component: motion.div,
-        variants: containerVariants,
-        initial: "hidden",
-        animate: "visible",
       }}
-      sx={{ width: open ? DRAWER_W : COLLAPSED_W, flexShrink: 0 }}
     >
-      {/* Header / Logo */}
-      <Box
-        component={Link}
-        to="/dashboard"
-        display="flex"
-        alignItems="center"
-        justifyContent="center"
-        sx={{
-          height: 132,
-          textDecoration: "none",
-          color: "inherit",
-          px: 1,
-        }}
-      >
+      {/* Logo */}
+      <Box component={Link} to="/dashboard" aria-label="Home" sx={{ display: "flex", alignItems: "center", justifyContent: open ? "flex-start" : "center", px: open ? 2.5 : 0, py: 2.25, color: "#fff", textDecoration: "none" }}>
         {open ? (
-          <motion.div
-            variants={itemVariants}
-            style={{ width: "100%", textAlign: "center" }}
-          >
-            <img
-              src={firmLogo}
-              alt="Firm Logo"
-              style={{
-                height: 56,
-                marginBottom: 8,
-                objectFit: "contain",
-                filter: logoFilter, // ✅ brighter + glow
-              }}
-            />
-            {/* 🔕 Firm name text removed as requested */}
-          </motion.div>
+          <Box sx={{ display: "flex", flexDirection: "column" }}>
+            <LogoMono style={{ height: 38, width: "auto", color: "#fff" }} aria-hidden="true" />
+            <Typography sx={{ mt: 0.75, fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: alpha("#fff", 0.7) }}>
+              Collections
+            </Typography>
+          </Box>
         ) : (
-          <motion.div
-            variants={itemVariants}
-            style={{
-              width: "100%",
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
-            <img
-              src={firmLogo}
-              alt="Firm"
-              style={{
-                height: 28,
-                objectFit: "contain",
-                filter: logoFilter, // ✅ keep the pop even when collapsed
-              }}
-            />
-          </motion.div>
+          <LogoMono viewBox="0 0 58 56" style={{ height: 34, width: 36, color: "#fff" }} aria-hidden="true" />
         )}
       </Box>
 
-      <Divider sx={{ opacity: 1, borderColor: dividerColor }} />
-
-      {/* Menu */}
-      <List disablePadding sx={{ py: 0.5 }}>
-        {sections.map((section, sIdx) => (
-          <Box key={sIdx} sx={{ mb: 0.5 }}>
-            {section.title && open && (
-              <ListSubheader
-                disableSticky
-                component={motion.div}
-                variants={itemVariants}
-                sx={{
-                  bgcolor: "transparent",
-                  color: subText,
-                  fontSize: 11,
-                  fontWeight: 800,
-                  letterSpacing: 0.7,
-                }}
-              >
-                {section.title.toUpperCase()}
-              </ListSubheader>
-            )}
-
-            {section.items.map(({ text, icon, to, badge }) => {
-              const button = (
-                <ListItemButton
-                  component={NavLink}
-                  to={to}
-                  end
-                  sx={{
-                    px: 2,
-                    minHeight: 46,
-                    justifyContent: open ? "initial" : "center",
-                    borderLeft: "4px solid transparent",
-                    "&.active": {
-                      background: activeBg,
-                      borderLeft: `4px solid ${accent}`,
-                      boxShadow: accentGlow,
-                      "& .MuiListItemIcon-root": { color: accent },
-                      "& .MuiListItemText-primary": { fontWeight: 700, color: "#fff" },
-                    },
-                    "&:hover": { background: hoverBg },
-                    transition: "all 180ms ease",
-                  }}
-                >
-                  <ListItemIcon
+      <Box sx={{ flex: 1, overflowY: "auto", overflowX: "hidden", pb: 1 }}>
+        {sections.map((sec, i) => (
+          <Box key={sec.title || i} sx={{ mt: i ? 1.5 : 0.5 }}>
+            {sec.title &&
+              (open ? (
+                <Typography sx={{ px: 2.75, pb: 0.5, fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: alpha("#fff", 0.55) }}>
+                  {sec.title}
+                </Typography>
+              ) : (
+                <Box sx={{ mx: 2, mb: 1, borderTop: `1px solid ${alpha("#fff", 0.15)}` }} />
+              ))}
+            <List dense disablePadding>
+              {sec.items.map((item) => {
+                const active = isActive(item);
+                const badge = Number(item.badge || 0);
+                const btn = (
+                  <ListItemButton
+                    key={item.to}
+                    component={NavLink}
+                    to={item.to}
+                    aria-current={active ? "page" : undefined}
                     sx={{
-                      color: textColor,
-                      minWidth: 0,
-                      mr: open ? 2 : "auto",
-                      justifyContent: "center",
+                      mx: 1.25,
+                      my: 0.25,
+                      minHeight: 42,
+                      borderRadius: 2,
+                      px: open ? 1.5 : 0,
+                      justifyContent: open ? "flex-start" : "center",
+                      color: active ? "#fff" : alpha("#fff", 0.82),
+                      bgcolor: active ? alpha("#fff", 0.14) : "transparent",
+                      position: "relative",
+                      "&::before": active
+                        ? { content: '""', position: "absolute", left: -10, top: 8, bottom: 8, width: 4, borderRadius: 4, bgcolor: BRAND.orange }
+                        : {},
+                      "&:hover": { bgcolor: alpha("#fff", active ? 0.18 : 0.08), color: "#fff" },
+                      "&.Mui-focusVisible": { outline: `2px solid ${alpha("#fff", 0.7)}` },
                     }}
                   >
-                    {badge ? (
-                      <Badge color="error" badgeContent={badge} overlap="circular">
-                        {icon}
-                      </Badge>
-                    ) : (
-                      icon
+                    <ListItemIcon sx={{ minWidth: open ? 38 : 0, color: "inherit", justifyContent: "center" }}>
+                      {open ? item.icon : <Badge color="secondary" variant="dot" invisible={!badge}>{item.icon}</Badge>}
+                    </ListItemIcon>
+                    {open && <ListItemText primary={item.text} primaryTypographyProps={{ fontWeight: active ? 800 : 600, fontSize: 14.5, noWrap: true }} />}
+                    {open && badge > 0 && (
+                      <Box component="span" sx={{ ml: 1, minWidth: 24, height: 20, px: 0.75, borderRadius: 10, bgcolor: BRAND.orange, color: "#fff", fontSize: 11.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                        {badge > 999 ? "999+" : badge}
+                      </Box>
                     )}
-                  </ListItemIcon>
-
-                  {open && (
-                    <ListItemText
-                      primary={text}
-                      primaryTypographyProps={{
-                        fontSize: 14,
-                        fontWeight: 500,
-                        color: textColor,
-                      }}
-                    />
-                  )}
-                </ListItemButton>
-              );
-
-              return (
-                <ListItem
-                  key={to}
-                  disablePadding
-                  sx={{ mb: 0.25 }}
-                  component={motion.div}
-                  variants={itemVariants}
-                >
-                  {open ? (
-                    button
-                  ) : (
-                    <Tooltip title={text} placement="right">
-                      <Box sx={{ width: "100%" }}>{button}</Box>
-                    </Tooltip>
-                  )}
-                </ListItem>
-              );
-            })}
+                  </ListItemButton>
+                );
+                return open ? (
+                  <Tooltip key={item.to} title={item.hint || ""} placement="right" enterDelay={700} disableHoverListener={!item.hint}>
+                    {btn}
+                  </Tooltip>
+                ) : (
+                  <Tooltip key={item.to} title={badge ? `${item.text} (${badge})` : item.text} placement="right">
+                    {btn}
+                  </Tooltip>
+                );
+              })}
+            </List>
           </Box>
         ))}
-      </List>
+      </Box>
 
-      <Box sx={{ flexGrow: 1 }} />
-
-      {/* Collapse/Expand control */}
-      <Box
-        sx={{
-          p: 1,
-          display: "flex",
-          justifyContent: open ? "flex-end" : "center",
-        }}
-        component={motion.div}
-        variants={itemVariants}
-      >
-        <IconButton
-          onClick={toggle}
-          size="small"
-          sx={{
-            color: textColor,
-            bgcolor: alpha("#ffffff", 0.1),
-            "&:hover": { bgcolor: alpha("#ffffff", 0.18) },
-          }}
-          aria-label={open ? "Collapse sidebar" : "Expand sidebar"}
-        >
-          <motion.div
-            animate={{ rotate: open ? 0 : 180 }}
-            transition={{ type: "spring", stiffness: 260, damping: 18 }}
-          >
-            {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-          </motion.div>
-        </IconButton>
+      <Box sx={{ p: 1, display: "flex", justifyContent: open ? "flex-end" : "center", borderTop: `1px solid ${alpha("#fff", 0.12)}` }}>
+        <Tooltip title={open ? "Collapse menu" : "Expand menu"} placement="right">
+          <IconButton onClick={onToggle} size="small" sx={{ color: alpha("#fff", 0.8) }} aria-label={open ? "Collapse menu" : "Expand menu"}>
+            {open ? <ChevronLeftRounded /> : <ChevronRightRounded />}
+          </IconButton>
+        </Tooltip>
       </Box>
     </Drawer>
   );

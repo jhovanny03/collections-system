@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import React, { useState } from "react";
 import { TextField, IconButton, Tooltip } from "@mui/material";
 import { Send as SendIcon } from "@mui/icons-material";
@@ -55,17 +56,17 @@ export default function FollowUpNotes({ client, clientId, clientName, nextFollow
 
       /*if (client.nextFollowUpDate) {
         const nextDate = client.nextFollowUpDate.seconds
-          ? new Date(client.nextFollowUpDate.seconds * 1000)
-          : new Date(client.nextFollowUpDate);
-        const end = new Date(nextDate);
+          ? asDate(client.nextFollowUpDate.seconds * 1000)
+          : asDate(client.nextFollowUpDate);
+        const end = asDate(nextDate);
         end.setDate(end.getDate() + 1);*/
 
         if (nextFollowUpDate) {
         // fecha de inicio y fin
         const nextDate = nextFollowUpDate.seconds
-          ? new Date(nextFollowUpDate.seconds * 1000)
-          : new Date(nextFollowUpDate);
-        const end = new Date(nextDate);
+          ? asDate(nextFollowUpDate.seconds * 1000)
+          : asDate(nextFollowUpDate);
+        const end = asDate(nextDate);
         end.setDate(end.getDate() + 1);
 
          const followUpEventId = `${clientId}-followup`;

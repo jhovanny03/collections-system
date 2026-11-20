@@ -1,4 +1,5 @@
 // src/Level10/Trends/AgingMixTrend.jsx
+import { asDate } from "../../utils/dates";
 import React, { useMemo } from "react";
 import { Paper, Box, Typography } from "@mui/material";
 import { LineChart } from "@mui/x-charts/LineChart";
@@ -18,13 +19,13 @@ const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
 const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-const toDate = (raw) => (raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw));
+const toDate = (raw) => (raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw));
 
 const getInstallmentAmountForDate = (schedule, date) => {
   if (!Array.isArray(schedule) || schedule.length === 0) return 500;
   for (const s of schedule) {
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
   return 500;
@@ -69,12 +70,12 @@ function deriveClientAging(client, asOfDate, dueDay = 15) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   const skipSet = new Set((client?.skipMonths || []).map(String));
   const months = [];
   {
-    const cursor = new Date(firstDueDate);
+    const cursor = asDate(firstDueDate);
     let expectedAccum = 0;
     while (cursor <= cutoff) {
       const key = ymKey(cursor);
@@ -82,7 +83,7 @@ function deriveClientAging(client, asOfDate, dueDay = 15) {
         const amt = getInstallmentAmountForDate(schedule, cursor);
         if (expectedAccum >= cap) break;
         if (expectedAccum + amt > cap) break;
-        months.push(new Date(cursor));
+        months.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);

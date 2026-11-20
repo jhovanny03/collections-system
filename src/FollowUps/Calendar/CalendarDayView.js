@@ -1,4 +1,5 @@
 // src/FollowUps/Calendar/CalendarDayView.js
+import { asDate } from "../../utils/dates";
 
 // 1) React imports for hooks and features
 import React, { useState, useRef, useEffect } from 'react'; // Added useRef/useEffect for navigation and dialog state
@@ -283,7 +284,7 @@ export default function CalendarDayView({ onPromise }) {
               <Box display="flex" alignItems="center" mb={1}>
                 <CalendarTodayIcon fontSize="small" sx={{ mr: 1 }} />
                 <Typography variant="body2">
-                  {format(new Date(detailEvent.start), "EEEE d MMMM ")}    
+                  {format(asDate(detailEvent.start), "EEEE d MMMM ")}    
                 </Typography>
               </Box>
               {/* Description field */}

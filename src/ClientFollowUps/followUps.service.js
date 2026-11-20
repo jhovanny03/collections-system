@@ -5,8 +5,8 @@ import {
   updateDoc,
   arrayUnion,
 } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
 import db from "../firebase";
+import { getActor } from "../auth/actor";
 
 // ---------- Date helpers ----------
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
@@ -27,17 +27,13 @@ export async function updateCohortItem(cohortId, clientId, updates) {
 export async function updateClientCommunication(clientId, partialLog) {
   if (!clientId) throw new Error("Missing clientId for communication log");
 
-  const auth = getAuth();
-  const user = auth.currentUser;
-
+  const who = getActor();
   const newLog = {
     message: partialLog?.message || "",
     timestamp: partialLog?.timestamp || new Date().toISOString(),
-    user:
-      partialLog?.user ||
-      user?.displayName ||
-      user?.email ||
-      "Anonymous",
+    user: who.name,
+    userEmail: who.email,
+    ...(partialLog?.source ? { source: partialLog.source } : {}),
   };
 
   const clientRef = doc(db, "clients", clientId);

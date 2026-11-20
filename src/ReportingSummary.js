@@ -1,4 +1,6 @@
 // ReportingSummary.js
+import { withPlans } from "./billing/plans";
+import { asDate } from "./utils/dates";
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import db from "./firebase";
@@ -22,7 +24,7 @@ import {
 const DUE_DAY = 15;
 
 const toDate = (raw) =>
-  raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+  raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw);
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 const ymKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 
@@ -30,14 +32,21 @@ const getInstallmentAmountForDate = (schedule, date) => {
   if (!Array.isArray(schedule) || schedule.length === 0) return 500; // default
   for (let i = 0; i < schedule.length; i++) {
     const s = schedule[i];
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
   return 500; // fallback
 };
 
-function computeBillingSnapshot(client, now = new Date()) {
+// Plan-aware: cases with several installment plans are computed plan by plan and
+// combined (src/billing/plans.js); single-plan clients go straight through.
+function computeBillingSnapshot(client, ...rest) {
+  if (!client) return computeBillingSnapshotSinglePlan(client, ...rest);
+  return withPlans(client, (c) => computeBillingSnapshotSinglePlan(c, ...rest));
+}
+
+function computeBillingSnapshotSinglePlan(client, now = new Date()) {
   const status = (client?.status || "active").toLowerCase();
   const isClosed = status === "closed";
   const isPaused = status === "paused";
@@ -91,18 +100,18 @@ function computeBillingSnapshot(client, now = new Date()) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   const monthsUpToCutoff = [];
   if (!isClosed) {
-    const cursor = new Date(firstDueDate);
+    const cursor = asDate(firstDueDate);
     let expectedAccum = 0;
     while (cursor <= cutoff) {
       if (!monthIsSkipped(cursor)) {
         const amt = getInstallmentAmountForDate(schedule, cursor);
         if (expectedAccum >= collectibleCap) break;
         if (expectedAccum + amt > collectibleCap) break;
-        monthsUpToCutoff.push(new Date(cursor));
+        monthsUpToCutoff.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);
@@ -111,10 +120,10 @@ function computeBillingSnapshot(client, now = new Date()) {
 
   const allPayments = client?.payments || [];
   const initialPaymentDate = client?.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
   const paymentsAfterInitial = initialPaymentDate
-    ? allPayments.filter((p) => new Date(p.date) > initialPaymentDate)
+    ? allPayments.filter((p) => asDate(p.date) > initialPaymentDate)
     : allPayments.slice();
 
   const pool = paymentsAfterInitial.map((p) => ({
@@ -218,7 +227,7 @@ export default function ReportingSummary() {
 
       const p = client.paymentPromise;
       if (p?.date) {
-        const promiseDate = new Date(p.date);
+        const promiseDate = asDate(p.date);
         if (promiseDate.getMonth() === thisMonth && promiseDate.getFullYear() === thisYear) {
           totalPromisedThisMonth += parseFloat(p.amount || 0);
         }
@@ -227,7 +236,7 @@ export default function ReportingSummary() {
         promisesMade++;
 
         const isFulfilled = (client.payments || []).some((payment) => {
-          const payDate = new Date(payment.date);
+          const payDate = asDate(payment.date);
           return (
             payDate <= promiseDate &&
             (parseFloat(payment.amount) || 0) >= (parseFloat(p.amount) || 0)
@@ -327,7 +336,7 @@ export default function ReportingSummary() {
         title="Collections Summary"
         subheader={
           <Typography variant="body2" color="text.secondary">
-            Last updated: {new Date(summary.lastUpdated).toLocaleString()}
+            Last updated: {asDate(summary.lastUpdated).toLocaleString()}
           </Typography>
         }
         sx={{ "& .MuiCardHeader-title": { fontWeight: 700 } }}

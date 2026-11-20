@@ -1,16 +1,17 @@
 // src/utils/notifications.js
+import { asDate } from "./dates";
 // ---------------------------
 // Lógica para generar notificaciones desde la lista de clientes.
 
 // Convierte varios formatos a Date
 const toDate = (v) => {
   if (v && typeof v === "object" && typeof v.toDate === "function") return v.toDate();
-  const d = new Date(v);
+  const d = asDate(v);
   return isNaN(d.getTime()) ? null : d;
 };
 
 export const startOfDay = (d) => {
-  const x = new Date(d);
+  const x = asDate(d);
   x.setHours(0, 0, 0, 0);
   return x;
 };
@@ -51,7 +52,7 @@ function amountDueAsOf(client, asOf = new Date()) {
   if (asOfMonth < startMonth) return 0;
 
   let expected = 0;
-  for (let cursor = new Date(startMonth); cursor <= asOfMonth; cursor = addMonths(cursor, 1)) {
+  for (let cursor = asDate(startMonth); cursor <= asOfMonth; cursor = addMonths(cursor, 1)) {
     expected += getMonthlyForMonth(client, cursor);
   }
 

@@ -1,8 +1,9 @@
 // src/ClientList/model/billingMath.js
+import { asDate } from "../../utils/dates";
 
 /** ====== Shared billing helpers (no React) ====== */
 export const toDate = (raw) =>
-  raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+  raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw);
 
 export const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
 
@@ -16,8 +17,8 @@ export const getInstallmentAmountForDate = (schedule, date) => {
   if (!Array.isArray(schedule) || schedule.length === 0) return 500;
   for (let i = 0; i < schedule.length; i++) {
     const s = schedule[i];
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
   return 500;
@@ -88,12 +89,12 @@ export const deriveClient = (client) => {
 
   const allPayments = client?.payments || [];
   const initialPaymentDate = client?.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
 
   // Exclude initial: only AFTER the initialPaymentDate (strictly later)
   const paymentsAfterInitial = initialPaymentDate
-    ? allPayments.filter((p) => new Date(p.date) > initialPaymentDate)
+    ? allPayments.filter((p) => asDate(p.date) > initialPaymentDate)
     : allPayments.slice();
 
   const paymentPool = paymentsAfterInitial.map((p) => ({
@@ -108,7 +109,7 @@ export const deriveClient = (client) => {
   // Installment schedule (sorted)
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   // Build months through cutoff,
   // cap by invoice total
@@ -131,14 +132,14 @@ export const deriveClient = (client) => {
       }
     }
 
-    const cursor = new Date(firstDueDate);
+    const cursor = asDate(firstDueDate);
     let expectedAccum = 0;
     while (cursor <= cutoff) {
       if (!monthIsSkipped(cursor)) {
         const amt = getInstallmentAmountForDate(schedule, cursor);
         if (expectedAccum >= collectibleCap) break;
         if (expectedAccum + amt > collectibleCap) break;
-        monthsUpToCutoff.push(new Date(cursor));
+        monthsUpToCutoff.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);

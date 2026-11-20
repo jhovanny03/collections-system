@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import React, { useEffect, useState } from "react";
 import {
   Box,
@@ -29,7 +30,7 @@ const FollowUpCalendar = ({ clients = [] }) => {
     clients.forEach((c) => {
       const date = c.paymentPromise?.date;
       if (!date) return;
-      const d = new Date(date);
+      const d = asDate(date);
       if (isNaN(d)) return;
       const key = d.toDateString();
       if (!map[key]) map[key] = [];
@@ -45,7 +46,7 @@ const FollowUpCalendar = ({ clients = [] }) => {
 
   const isMissed = (date) => {
     const today = new Date();
-    return new Date(date).setHours(0, 0, 0, 0) < today.setHours(0, 0, 0, 0);
+    return asDate(date).setHours(0, 0, 0, 0) < today.setHours(0, 0, 0, 0);
   };
 
   const renderDay = (day, _value, DayProps) => {
@@ -140,7 +141,7 @@ const FollowUpCalendar = ({ clients = [] }) => {
                   {parseFloat(selectedPromise.paymentPromise.amount).toLocaleString()}
                 </Typography>
                 <Typography gutterBottom>
-                  Date: {new Date(selectedPromise.paymentPromise.date).toDateString()}
+                  Date: {asDate(selectedPromise.paymentPromise.date).toDateString()}
                 </Typography>
                 {selectedPromise.paymentPromise.notes && (
                   <Typography gutterBottom>

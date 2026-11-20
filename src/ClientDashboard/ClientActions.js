@@ -1,7 +1,9 @@
 // ✅ Updated ClientActions.js (pause/close/reopen fully aligned)
+import { asDate } from "../utils/dates";
 import React, { useMemo, useState } from "react";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import db from "../firebase";
+import { getActor } from "../auth/actor";
 import {
   Stack,
   Button,
@@ -33,9 +35,9 @@ function buildMonthRange(startDate, endDate) {
   const start = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   const end = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
   const out = [];
-  const cur = new Date(start);
+  const cur = asDate(start);
   while (cur <= end) {
-    out.push(new Date(cur));
+    out.push(asDate(cur));
     cur.setMonth(cur.getMonth() + 1);
   }
   return out;
@@ -159,7 +161,8 @@ function SkipPaymentsDialog({ open, onClose, client, onSaved }) {
 }
 
 // ---------- Main Actions ----------
-export default function ClientActions({ client, setClient }) {
+/** Pause / Skip / Close. `compact` renders small buttons for the profile header. */
+export default function ClientActions({ client, setClient, compact = false }) {
   const [skipOpen, setSkipOpen] = useState(false);
 
   // Pause: freeze projection, don’t modify history
@@ -197,9 +200,12 @@ export default function ClientActions({ client, setClient }) {
     if (!client?.id) return;
     if (!window.confirm("Close this case? No more payments will be required.")) return;
     const ref = doc(db, "clients", client.id);
+    // Closed by a person: the MyCase sync never reopens it on its own.
     await updateDoc(ref, {
       status: "closed",
       closedAt: serverTimestamp(),
+      closedBy: getActor().name,
+      closedReason: "Closed in Collections",
     });
     setClient((c) => ({
       ...c,
@@ -215,6 +221,8 @@ export default function ClientActions({ client, setClient }) {
     await updateDoc(ref, {
       status: "active",
       closedAt: null,
+      closedBy: null,
+      closedReason: null,
     });
     setClient((c) => ({
       ...c,
@@ -227,6 +235,46 @@ export default function ClientActions({ client, setClient }) {
   const isPaused = client?.status === "paused";
 
   if (!client?.id) return null;
+
+  const skipDialog = (
+    <SkipPaymentsDialog
+      open={skipOpen}
+      onClose={() => setSkipOpen(false)}
+      client={client}
+      onSaved={(newSkipMonths) => setClient((c) => ({ ...c, skipMonths: newSkipMonths }))}
+    />
+  );
+
+  if (compact) {
+    return (
+      <>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          {isClosed ? (
+            <Button size="small" variant="contained" color="success" startIcon={<RestartAltIcon />} onClick={reopenCase}>Reopen</Button>
+          ) : isPaused ? (
+            <Tooltip title="Resume expected payments (past-due months stay the same)">
+              <Button size="small" variant="contained" color="success" startIcon={<PlayArrowIcon />} onClick={resume}>Resume</Button>
+            </Tooltip>
+          ) : (
+            <Tooltip title="Pause expected payments (no new due months while paused)">
+              <Button size="small" variant="outlined" color="warning" startIcon={<PauseIcon />} onClick={pause}>Pause</Button>
+            </Tooltip>
+          )}
+          <Tooltip title="Waive specific months (not billed, not past due)">
+            <span>
+              <Button size="small" variant="outlined" startIcon={<CalendarMonthIcon />} onClick={() => setSkipOpen(true)} disabled={isClosed}>Skip months</Button>
+            </span>
+          </Tooltip>
+          {!isClosed && (
+            <Tooltip title="Close this client (no more payments required)">
+              <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon />} onClick={closeCase}>Close</Button>
+            </Tooltip>
+          )}
+        </Stack>
+        {skipDialog}
+      </>
+    );
+  }
 
   return (
     <>

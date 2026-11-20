@@ -1,4 +1,5 @@
 // src/FollowUps/Calendar/AgendaView.js
+import { asDate } from "../../utils/dates";
 import React, { useState } from 'react'; 
 import {
   Box,
@@ -53,8 +54,8 @@ export default function AgendaView({ onPromise }) {
   // Normalize and ensure dates are Date objects
   const normalized = events.map(ev => ({
     ...ev,
-    start: ev.start instanceof Date ? ev.start : new Date(ev.start),
-    end: ev.end instanceof Date ? ev.end : new Date(ev.end),
+    start: ev.start instanceof Date ? ev.start : asDate(ev.start),
+    end: ev.end instanceof Date ? ev.end : asDate(ev.end),
   }));
 
   // Apply color filter

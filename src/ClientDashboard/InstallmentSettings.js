@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import React, { useState } from "react";
 import {
   Typography,
@@ -41,13 +42,13 @@ export default function InstallmentSettings({ client, setClient }) {
   };
 
   const formatDate = (str) =>
-    new Date(str).toLocaleDateString("default", {
+    asDate(str).toLocaleDateString("default", {
       month: "long",
       year: "numeric",
     });
 
   const addMonths = (dateStr, months) => {
-    const date = new Date(dateStr);
+    const date = asDate(dateStr);
     date.setMonth(date.getMonth() + months);
     return date.toISOString().split("T")[0];
   };
@@ -79,7 +80,7 @@ export default function InstallmentSettings({ client, setClient }) {
       schedule.push(newEntry);
     }
 
-    schedule.sort((a, b) => new Date(a.start) - new Date(b.start));
+    schedule.sort((a, b) => asDate(a.start) - asDate(b.start));
 
     const nowIso = new Date().toISOString();       // NEW (opcional: para “Last Client Today”)
     const clientRef = doc(db, "clients", client.id);
@@ -103,7 +104,7 @@ export default function InstallmentSettings({ client, setClient }) {
       Math.max(
         1,
         Math.round(
-          (new Date(item.end) - new Date(item.start)) /
+          (asDate(item.end) - asDate(item.start)) /
             (1000 * 60 * 60 * 24 * 30)
         )
       )

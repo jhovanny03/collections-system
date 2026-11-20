@@ -1,3 +1,4 @@
+import { asDate } from "../../utils/dates";
 import React from 'react';
 import { useState, useRef, useEffect } from 'react';
 import FullCalendar from '@fullcalendar/react';
@@ -207,7 +208,7 @@ useEffect(() => {
               <Box display="flex" alignItems="center" mb={1}>
                 <CalendarTodayIcon fontSize="small" sx={{ mr: 1 }} />
                 <Typography variant="body2">
-                  {format(new Date(detailEvent.start), "EEEE d MMMM ")}    
+                  {format(asDate(detailEvent.start), "EEEE d MMMM ")}    
                 </Typography>
               </Box>
               {/* Description field */}

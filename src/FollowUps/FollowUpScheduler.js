@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import React, { useState } from "react";
 import { format, isBefore } from "date-fns";
 import { TextField, IconButton, Tooltip } from "@mui/material";
@@ -11,7 +12,7 @@ const FollowUpScheduler = ({ client, updateFollowUpDate }) => {
   const theme = useTheme();
   const [editMode, setEditMode] = useState(false);
   const [selectedDate, setSelectedDate] = useState(
-    client.nextFollowUpDate ? new Date(client.nextFollowUpDate) : null
+    client.nextFollowUpDate ? asDate(client.nextFollowUpDate) : null
   );
 
    const getFollowUpColor = (count) => {
@@ -42,7 +43,7 @@ const FollowUpScheduler = ({ client, updateFollowUpDate }) => {
       // 2) Disparar evento en Calendar
 
       const start = selectedDate;
-      const end = new Date(start);
+      const end = asDate(start);
       end.setDate(end.getDate() + 1);
 
       // ——— Mismo cálculo de amountDue que en FollowUps.js ———
@@ -50,10 +51,10 @@ const FollowUpScheduler = ({ client, updateFollowUpDate }) => {
       const payments = Array.isArray(client.payments) ? client.payments : [];
       const firstRaw = client.firstInstallmentDate;
       const firstDate = firstRaw.seconds
-        ? new Date(firstRaw.seconds * 1000)
-        : new Date(firstRaw);
+        ? asDate(firstRaw.seconds * 1000)
+        : asDate(firstRaw);
       const validPayments = payments
-        .map(p => ({ ...p, date: new Date(p.date) }))
+        .map(p => ({ ...p, date: asDate(p.date) }))
         .filter(p => !isNaN(p.date) && p.date >= firstDate);
       const totalPaid = validPayments.reduce((sum, p) => sum + p.amount, 0);
       const monthsSinceStart =

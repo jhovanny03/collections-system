@@ -1,4 +1,5 @@
 // billingUtils.js
+import { asDate } from "./utils/dates";
 
 /**
  * Calculates missed installment months based on expected schedule and actual payments.
@@ -10,15 +11,15 @@
 export function getMissedInstallments(startDateString, payments = [], monthlyAmount = 500) {
     if (!startDateString) return [];
   
-    const startDate = new Date(startDateString);
+    const startDate = asDate(startDateString);
     const today = new Date();
   
     // Generate list of due dates from start date to today
     const dueDates = [];
-    const current = new Date(startDate);
+    const current = asDate(startDate);
   
     while (current < today) {
-      dueDates.push(new Date(current));
+      dueDates.push(asDate(current));
       current.setMonth(current.getMonth() + 1);
     }
   

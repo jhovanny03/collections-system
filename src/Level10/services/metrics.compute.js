@@ -1,4 +1,6 @@
 // src/Level10/services/metrics.compute.js
+import { withPlans } from "../../billing/plans";
+import { asDate } from "../../utils/dates";
 
 // ---------- Utils ----------
 const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
@@ -7,14 +9,14 @@ const labelFor = (d) =>
   `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
 
 const toDate = (raw) =>
-  raw?.seconds ? new Date(raw.seconds * 1000) : new Date(raw);
+  raw?.seconds ? asDate(raw.seconds * 1000) : asDate(raw);
 const money = (n) => Number(n || 0);
 
 const getInstallmentAmountForDate = (schedule, date) => {
   if (!Array.isArray(schedule) || schedule.length === 0) return 500;
   for (const s of schedule) {
-    const sStart = new Date(s.start);
-    const sEnd = new Date(s.end);
+    const sStart = asDate(s.start);
+    const sEnd = asDate(s.end);
     if (date >= sStart && date <= sEnd) return Number(s.amount || 500);
   }
   return 500;
@@ -54,12 +56,12 @@ function endOfMonth(d) {
  * - Paused before the 15th => current month not billable
  * - Enforces CAP: if cap was exhausted before this month, expected=0, collected=0
  */
-function getExpectedCollectedForMonth(client, monthStr, dueDay = 15, cutoffDate = null) {
+export function getExpectedCollectedForMonth(client, monthStr, dueDay = 15, cutoffDate = null) {
   // Build a Date representing the *current month for Level10* (e.g. "2025-11")
   const [yy, mm] = monthStr.split("-").map(Number);
   const monthDate = new Date(yy, mm - 1, 15); // use the 15th as internal anchor
   const monthEnd = endOfMonth(monthDate);
-  const cutoff = cutoffDate ? new Date(cutoffDate) : monthEnd;
+  const cutoff = cutoffDate ? asDate(cutoffDate) : monthEnd;
 
   const status = (client?.status || "").toLowerCase();
   if (status === "closed") return { expected: 0, collected: 0 };
@@ -70,7 +72,7 @@ function getExpectedCollectedForMonth(client, monthStr, dueDay = 15, cutoffDate 
   const cap = getCollectibleCap(client);
   const schedule = (client?.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
   const skipSet = new Set((client?.skipMonths || []).map(String));
 
   // Is this month billable?
@@ -168,7 +170,7 @@ export function deriveClientAging(client, asOfDate, dueDay = 15) {
 
   const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
   const initialPaymentDate = client?.initialPaymentDate
-    ? new Date(client.initialPaymentDate)
+    ? asDate(client.initialPaymentDate)
     : null;
   const collectibleCap = Math.max(0, invoiceEffective - initialPayment);
 
@@ -196,7 +198,7 @@ export function deriveClientAging(client, asOfDate, dueDay = 15) {
 
   const allPayments = Array.isArray(client?.payments) ? client.payments : [];
   const paymentsAfterInitial = initialPaymentDate
-    ? allPayments.filter((p) => new Date(p.date) > initialPaymentDate)
+    ? allPayments.filter((p) => asDate(p.date) > initialPaymentDate)
     : allPayments.slice();
   const pool = paymentsAfterInitial.map((p) => ({
     amount: Number(p.amount || 0),
@@ -208,7 +210,7 @@ export function deriveClientAging(client, asOfDate, dueDay = 15) {
 
   const schedule = (client.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   // cutoff honored: paused? stop on pause boundary; else asOfDate
   let cutoff = asOfDate || new Date();
@@ -225,14 +227,14 @@ export function deriveClientAging(client, asOfDate, dueDay = 15) {
 
   const monthsUpToCutoff = [];
   {
-    const cursor = new Date(firstDueDate);
+    const cursor = asDate(firstDueDate);
     let expectedAccum = 0;
     while (cursor <= cutoff) {
       if (!monthIsSkipped(cursor)) {
         const amt = getInstallmentAmountForDate(schedule, cursor);
         if (expectedAccum >= collectibleCap) break;
         if (expectedAccum + amt > collectibleCap) break;
-        monthsUpToCutoff.push(new Date(cursor));
+        monthsUpToCutoff.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);
@@ -257,7 +259,7 @@ export function deriveClientAging(client, asOfDate, dueDay = 15) {
         label: labelFor(monthDate),
         key: ymKey(monthDate),
         amount: amountDue,
-        date: new Date(monthDate),
+        date: asDate(monthDate),
       });
     }
   }
@@ -316,7 +318,7 @@ export function computeOpening30AR({
   tz = "America/New_York",
   dueDay = 15,
 }) {
-  const asOf = new Date(`${month}-01T00:00:00`);
+  const asOf = asDate(`${month}-01T00:00:00`);
   let total = 0;
   for (const c of clients) {
     const ag = deriveClientAging(c, asOf, dueDay);
@@ -330,7 +332,14 @@ export function computeOpening30AR({
  * simplified and adapted just for AR (amountDue).
  * This is what the dashboard uses for totalOwed.
  */
-function computeBillingSnapshotForAR(client, now = new Date(), dueDay = 15) {
+// Plan-aware: cases with several installment plans are computed plan by plan and
+// combined (src/billing/plans.js); single-plan clients go straight through.
+function computeBillingSnapshotForAR(client, ...rest) {
+  if (!client) return computeBillingSnapshotForARSinglePlan(client, ...rest);
+  return withPlans(client, (c) => computeBillingSnapshotForARSinglePlan(c, ...rest));
+}
+
+function computeBillingSnapshotForARSinglePlan(client, now = new Date(), dueDay = 15) {
   const status = (client?.status || "active").toLowerCase();
   const isClosed = status === "closed";
   const collectibleCap = getCollectibleCap(client);
@@ -353,11 +362,11 @@ function computeBillingSnapshotForAR(client, now = new Date(), dueDay = 15) {
 
   const schedule = (client?.installmentSchedule || [])
     .slice()
-    .sort((a, b) => new Date(a.start) - new Date(b.start));
+    .sort((a, b) => asDate(a.start) - asDate(b.start));
 
   // Build months to NOW but stop when expected sum would exceed CAP
   const months = [];
-  const cursor = new Date(firstDueDate);
+  const cursor = asDate(firstDueDate);
   let expectedAccum = 0;
   if (!isClosed) {
     while (cursor <= now) {
@@ -365,7 +374,7 @@ function computeBillingSnapshotForAR(client, now = new Date(), dueDay = 15) {
         const amt = getInstallmentAmountForDate(schedule, cursor);
         if (expectedAccum >= collectibleCap) break; // cap reached
         if (expectedAccum + amt > collectibleCap) break; // adding this month would exceed cap
-        months.push(new Date(cursor));
+        months.push(asDate(cursor));
         expectedAccum += amt;
       }
       cursor.setMonth(cursor.getMonth() + 1);
@@ -492,7 +501,7 @@ export function computeAll({
   for (const c of clients) {
     const pays = Array.isArray(c.payments) ? c.payments : [];
     for (const p of pays) {
-      const payDate = new Date(p.date);
+      const payDate = asDate(p.date);
       // only payments inside the Level10 month
       const m = `${payDate.getFullYear()}-${String(payDate.getMonth() + 1).padStart(2, "0")}`;
       if (m !== month) continue;
@@ -524,7 +533,7 @@ export function computeAll({
       c,
       month,
       dueDay,
-      endOfMonth(new Date(`${month}-15T00:00:00`))
+      endOfMonth(asDate(`${month}-15T00:00:00`))
     );
     expectedPaymentsMonth += expected;
   }

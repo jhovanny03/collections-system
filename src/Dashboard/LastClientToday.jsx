@@ -1,3 +1,4 @@
+import { asDate } from "../utils/dates";
 import * as React from "react";
 import DashboardCard from "./DashboardCard";
 import {
@@ -10,7 +11,7 @@ import PersonRounded from "@mui/icons-material/PersonRounded";
 const toDate = (v) => {
   if (!v) return null;
   if (typeof v === "object" && typeof v.toDate === "function") return v.toDate();
-  const d = new Date(v);
+  const d = asDate(v);
   return isNaN(d.getTime()) ? null : d;
 };
 

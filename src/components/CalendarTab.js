@@ -1,4 +1,5 @@
 // src/components/CalendarTab.js
+import { asDate } from "../utils/dates";
 import React, { useState, useEffect } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin    from '@fullcalendar/daygrid';
@@ -189,7 +190,7 @@ export default function CalendarTab() {
           dateClick={({ date }) => { /* opcional: mostrar lista de ese día*/ }}
           eventClick={handleEventClick}
           datesSet={({ view, start, end, startStr }) => {
-            setCurrentDate(new Date(startStr));
+            setCurrentDate(asDate(startStr));
           }}
           dayMaxEventRows={useDotBadge ? 3 : false}
           displayEventTime={!useDotBadge}

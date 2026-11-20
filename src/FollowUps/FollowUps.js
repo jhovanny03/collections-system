@@ -1,4 +1,5 @@
 // src/FollowUps/FollowUps.js
+import { asDate } from "../utils/dates";
 import React, { useEffect, useState } from "react";
 
 import {
@@ -87,8 +88,8 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
       // ── MOD: Sólo incluir si nextFollowUpDate existe y cae en nuestra ventana
       if (!client.nextFollowUpDate) return false;
       const raw = client.nextFollowUpDate.seconds
-      ? new Date(client.nextFollowUpDate.seconds * 1000)
-      : new Date(client.nextFollowUpDate);
+      ? asDate(client.nextFollowUpDate.seconds * 1000)
+      : asDate(client.nextFollowUpDate);
       if (raw < windowStart || raw >= windowEnd) return false;
 
         // MOD: Excluir clientes que ya hicieron Payment Promise
@@ -98,15 +99,15 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
       
 
       const firstInstallmentDate = firstRaw.seconds
-        ? new Date(firstRaw.seconds * 1000)
-        : new Date(firstRaw);
+        ? asDate(firstRaw.seconds * 1000)
+        : asDate(firstRaw);
       if (isNaN(firstInstallmentDate.getTime())) return false;
 
       const monthly = Number(client.installmentAmount || 500);
       const payments = Array.isArray(client.payments) ? client.payments : [];
 
       const validPayments = payments.filter((p) => {
-        const date = new Date(p.date);
+        const date = asDate(p.date);
         return !isNaN(date.getTime()) && date >= firstInstallmentDate;
       });
 
@@ -126,7 +127,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
 
       const logs = client.communicationLog || client.communicationLogs || [];
       const validDates = logs
-        .map((log) => new Date(log.timestamp || log.date))
+        .map((log) => asDate(log.timestamp || log.date))
         .filter((d) => !isNaN(d.getTime()));
 
       const lastContactDate = validDates.length
@@ -137,7 +138,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
         lastContactDate && lastContactDate > cutoffDate;
 
       const nextFollowUp = client.nextFollowUpDate
-        ? new Date(new Date(client.nextFollowUpDate).toDateString())
+        ? new Date(asDate(client.nextFollowUpDate).toDateString())
         : null;
 
       const needsFollowUp =
@@ -152,7 +153,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
 
     // --- helpers de fecha a medianoche ---
   const atMidnight = (d) => {
-    const x = new Date(d);
+    const x = asDate(d);
     x.setHours(0, 0, 0, 0);
     return x;
   };
@@ -166,10 +167,10 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
   }
   // Objeto-like con seconds (también común en Firestore)
   if (typeof v?.seconds === "number") {
-    return new Date(v.seconds * 1000);
+    return asDate(v.seconds * 1000);
   }
   // String / Date nativo
-  const d = new Date(v);
+  const d = asDate(v);
   return isNaN(d) ? null : d;
 };
 
@@ -288,7 +289,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
 
       // Normaliza a medianoche local para consistencia
     const normalize = (v) => {
-      const d = new Date(v);
+      const d = asDate(v);
       d.setHours(0, 0, 0, 0);
       return d;
     };
@@ -314,11 +315,11 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
 
     const firstRaw = client.firstInstallmentDate;
     const firstInstallmentDate = firstRaw.seconds
-      ? new Date(firstRaw.seconds * 1000)
-      : new Date(firstRaw);
+      ? asDate(firstRaw.seconds * 1000)
+      : asDate(firstRaw);
 
     const validPayments = payments.filter((p) => {
-      const date = new Date(p.date);
+      const date = asDate(p.date);
       return !isNaN(date.getTime()) && date >= firstInstallmentDate;
     });
 
@@ -378,11 +379,11 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
     
     .filter(c => c.nextFollowUpDate)
     .map(c => {
-      const when = new Date(c.nextFollowUpDate);
+      const when = asDate(c.nextFollowUpDate);
       const title = c.name || `${c.firstName || ""} ${c.lastName || ""}`;
       const logs = c.communicationLogs || c.communicationLog || [];
       const followUpCount = logs.length;
-      const end = new Date(when);
+      const end = asDate(when);
       end.setDate(end.getDate() + 1);
 
       // ——— Aquí calculas el amountDue igual que en la tabla ———
@@ -390,10 +391,10 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
       const payments = Array.isArray(c.payments) ? c.payments : [];
       const firstRaw = c.firstInstallmentDate;
       const firstDate = firstRaw.seconds
-        ? new Date(firstRaw.seconds * 1000)
-        : new Date(firstRaw);
+        ? asDate(firstRaw.seconds * 1000)
+        : asDate(firstRaw);
       const validPayments = payments
-        .map(p => ({ ...p, date: new Date(p.date) }))
+        .map(p => ({ ...p, date: asDate(p.date) }))
         .filter(p => !isNaN(p.date) && p.date >= firstDate);
       const totalPaid = validPayments.reduce((sum, p) => sum + p.amount, 0);
       const monthsSinceStart =
@@ -408,7 +409,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
       let description = "";
       if (logs.length) {
         const sorted = [...logs].sort((a, b) =>
-          new Date(b.timestamp || b.date) - new Date(a.timestamp || a.date)
+          asDate(b.timestamp || b.date) - asDate(a.timestamp || a.date)
         );
         const last = sorted[0];
         description = last.message || last.text || "";
@@ -542,7 +543,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
                   const logs =
                     client.communicationLog || client.communicationLogs || [];
                   const lastLog = logs
-                    .map((log) => new Date(log.timestamp || log.date))
+                    .map((log) => asDate(log.timestamp || log.date))
                     .filter((d) => !isNaN(d.getTime()))
                     .sort((a, b) => b - a)[0];
                   /* displayedClients.map((client) => {
@@ -553,11 +554,11 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
 
                     const firstRaw = client.firstInstallmentDate;
                     const firstInstallmentDate = firstRaw.seconds
-                      ? new Date(firstRaw.seconds * 1000)
-                      : new Date(firstRaw);
+                      ? asDate(firstRaw.seconds * 1000)
+                      : asDate(firstRaw);
 
                     const validPayments = payments.filter((p) => {
-                      const date = new Date(p.date);
+                      const date = asDate(p.date);
                       return !isNaN(date.getTime()) && date >= firstInstallmentDate;
                     });
 
@@ -586,7 +587,7 @@ const FollowUps = ({ clients, updateClientCommunication }) => {
                       client.communicationLogs ||
                       []
                     )
-                      .map((log) => new Date(log.timestamp || log.date))
+                      .map((log) => asDate(log.timestamp || log.date))
                       .filter((d) => !isNaN(d.getTime()))
                       .sort((a, b) => b - a)[0]; */
 

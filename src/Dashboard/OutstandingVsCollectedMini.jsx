@@ -1,4 +1,5 @@
 // src/Dashboard/OutstandingVsCollectedMini.jsx
+import { asDate } from "../utils/dates";
 import React, { useEffect, useMemo, useState } from "react";
 import DashboardCard from "./DashboardCard";
 import { PieChart } from "@mui/x-charts/PieChart";
@@ -10,7 +11,7 @@ import { db } from "../firebase";
 const DUE_DAY = 15;
 
 const toDate = (v) =>
-  v?.toDate?.() ? v.toDate() : isNaN(new Date(v)) ? null : new Date(v);
+  v?.toDate?.() ? v.toDate() : isNaN(asDate(v)) ? null : asDate(v);
 
 const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
 const endOfMonth = (d) =>
@@ -100,14 +101,14 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
   const months = [];
   let expectedAccum = 0;
 
-  for (let c = new Date(firstMonth); c <= monthStart; c.setMonth(c.getMonth() + 1)) {
+  for (let c = asDate(firstMonth); c <= monthStart; c.setMonth(c.getMonth() + 1)) {
     const key = ymKey(c);
     const isCurrent =
       c.getFullYear() === monthStart.getFullYear() &&
       c.getMonth() === monthStart.getMonth();
 
     if (skipSet.has(key)) {
-      months.push({ monthDate: new Date(c), expected: isCurrent ? 0 : 0, collected: 0 });
+      months.push({ monthDate: asDate(c), expected: isCurrent ? 0 : 0, collected: 0 });
       continue;
     }
 
@@ -122,7 +123,7 @@ function getClientExpectedCollectedThisMonth(client, monthDate = new Date()) {
     if (expectedForThis > 0) expectedAccum += amt;
 
     months.push({
-      monthDate: new Date(c),
+      monthDate: asDate(c),
       expected: expectedForThis,
       collected: 0,
     });

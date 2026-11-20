@@ -1,3 +1,4 @@
+import { asDate } from "./utils/dates";
 import React, { useState, useEffect } from 'react';
 import { doc, updateDoc } from 'firebase/firestore';
 import db from './firebase';
@@ -24,7 +25,7 @@ function EditClient({ client, onClose, onSave }) {
     if (client) {
       setForm({
         ...client,
-        lastPaymentDate: client.lastPaymentDate ? new Date(client.lastPaymentDate) : '',
+        lastPaymentDate: client.lastPaymentDate ? asDate(client.lastPaymentDate) : '',
       });
 
       // Pre-populate monthsPastDue as date range
