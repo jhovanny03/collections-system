@@ -23,6 +23,7 @@ import CreateClient from "./CreateClient";
 import ClientDashboard from "./ClientDashboard/ClientDashboard";
 import PromisedPayments from "./pages/PromisedPayments";
 import InitialPayments from "./pages/InitialPayments";
+import DataQuality from "./pages/DataQuality";
 import FollowUps from "./ClientFollowUps/FollowUps.jsx";
 import Home from "./Dashboard/Home";
 import UserManagement from "./admin/UserManagement.jsx";
@@ -215,6 +216,14 @@ function ThemeAndRoutes() {
                           element={
                             <EditorRoute>
                               <InitialPayments />
+                            </EditorRoute>
+                          }
+                        />
+                        <Route
+                          path="/data-quality"
+                          element={
+                            <EditorRoute>
+                              <DataQuality />
                             </EditorRoute>
                           }
                         />

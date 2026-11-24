@@ -97,8 +97,10 @@ export function WorkQueueProvider({ children }) {
     };
     // Badge = new work only; "existing clients to tag" is a backlog shown inside Case Setup.
     counts.caseSetupTotal = [counts.newCases, counts.waitingPlan].reduce((s, n) => s + (n || 0), 0);
+    // Data quality: monthly amounts waiting for billing to confirm (prepared rows).
+    counts.dataQuality = clients.filter((r) => r.steadyPay).length;
     return { counts, loading: server.loading, refresh };
-  }, [server, cohort, promises, refresh]);
+  }, [server, cohort, promises, refresh, clients]);
 
   return <WorkQueueContext.Provider value={value}>{children}</WorkQueueContext.Provider>;
 }

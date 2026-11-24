@@ -40,6 +40,19 @@ function computeSnapshot(clientDocs, now = new Date()) {
   const rows = clientRows(clients, now);
   const byId = new Map(clients.map((c) => [c.id, c]));
   rows.forEach((r) => Object.assign(r, extras(byId.get(r.id) || {})));
+  // Data quality page: steady payments that differ from the plan, and why ended plans owe.
+  const { steadyPayment, planEndedReason } = require("./shared/billing/dataQuality");
+  rows.forEach((r) => {
+    const c = byId.get(r.id);
+    if (!c || r.status === "closed") return;
+    try {
+      const sp = steadyPayment(c, now);
+      if (sp) r.steadyPay = sp;
+      if (r.planEnded) r.endedReason = planEndedReason(c, now);
+    } catch (e) {
+      /* a malformed plan is left for the other checks */
+    }
+  });
   const payments = allPayments(clients);
   const { agingTrend, collectionForecast, writeOffRisk, planHealth } = require("./shared/billing/insights");
   const rowsById = new Map(rows.map((r) => [r.id, r]));

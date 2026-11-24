@@ -8,7 +8,7 @@ const path = require("path");
 const { transform } = require("sucrase");
 
 const ROOT = path.resolve(__dirname, "..");
-const FILES = ["utils/dates.js", "billing/plans.js", "billing/ledger.js", "billing/mycaseOverlay.js", "billing/contact.js", "billing/book.js", "billing/insights.js"];
+const FILES = ["utils/dates.js", "billing/plans.js", "billing/ledger.js", "billing/mycaseOverlay.js", "billing/contact.js", "billing/book.js", "billing/insights.js", "billing/dataQuality.js"];
 
 for (const rel of FILES) {
   const src = path.join(ROOT, "src", rel);

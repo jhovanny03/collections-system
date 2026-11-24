@@ -32,6 +32,7 @@ const PAGES = [
   ["/follow-ups", "Follow-ups"],
   ["/promised-payments", "Promised payments"],
   ["/initial-payments", "Initial payments"],
+  ["/data-quality", "Data quality"],
   ["/case-setup", "Case Setup"],
   ["/mycase-review", "MyCase Review"],
   ["/reports", "Reports"],

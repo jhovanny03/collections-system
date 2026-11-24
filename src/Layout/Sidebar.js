@@ -12,6 +12,7 @@ import EventAvailableRounded from "@mui/icons-material/EventAvailableRounded";
 import AccountBalanceWalletRounded from "@mui/icons-material/AccountBalanceWalletRounded";
 import PlaylistAddCheckRounded from "@mui/icons-material/PlaylistAddCheckRounded";
 import RuleRounded from "@mui/icons-material/RuleRounded";
+import FactCheckRounded from "@mui/icons-material/FactCheckRounded";
 import InsightsRounded from "@mui/icons-material/InsightsRounded";
 import GroupsRounded from "@mui/icons-material/GroupsRounded";
 import ManageAccountsRounded from "@mui/icons-material/ManageAccountsRounded";
@@ -49,6 +50,7 @@ function useSections() {
         { text: "Initial payments", icon: <AccountBalanceWalletRounded />, to: "/initial-payments", badge: counts.initialOpen, hint: "Initial payments not paid in full in MyCase" },
         { text: "Case Setup", icon: <PlaylistAddCheckRounded />, to: "/case-setup", badge: counts.caseSetupTotal, hint: "New MyCase cases, plans to set and links to fix" },
         { text: "MyCase Review", icon: <RuleRounded />, to: "/mycase-review", badge: counts.reviewOpen, hint: "MyCase payments the sync could not place on its own" },
+        { text: "Data quality", icon: <FactCheckRounded />, to: "/data-quality", badge: counts.dataQuality, hint: "Monthly amounts to confirm, plans that ended owing, queues to clear" },
         ...(FEATURES.createClient ? [{ text: "Create client", icon: <PersonAddAlt1Rounded />, to: "/create-client" }] : []),
       ],
     });
