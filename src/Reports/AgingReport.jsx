@@ -10,16 +10,16 @@ import {
 import SearchRounded from "@mui/icons-material/SearchRounded";
 import DownloadRounded from "@mui/icons-material/DownloadRounded";
 import { Link as RouterLink } from "react-router-dom";
-import { useClients } from "../data/ClientsProvider";
-import { usePortfolio, money, pct, AGING_BUCKETS } from "../billing/portfolio";
+import { useBook } from "../data/BookProvider";
+import { money, pct, AGING_BUCKETS } from "../billing/portfolio";
 import { StatCard, Tiles } from "../ui/kit";
 import AgingTrend from "./AgingTrend";
 
 const KEYS = AGING_BUCKETS.map((b) => b.key);
 
 export default function AgingReport() {
-  const { clients, loading } = useClients();
-  const { rows, summary: s } = usePortfolio(clients);
+  const { rows, summary: s, ready } = useBook();
+  const loading = !ready;
   const [search, setSearch] = useState("");
   const [caseType, setCaseType] = useState("Any");
   const [source, setSource] = useState("Any");
@@ -60,7 +60,7 @@ export default function AgingReport() {
   }, [list]);
 
   const head = (by, label, align = "right") => (
-    <TableCell align={align} sortDirection={sort.by === by ? sort.dir : false}>
+    <TableCell key={by} align={align} sortDirection={sort.by === by ? sort.dir : false}>
       <TableSortLabel active={sort.by === by} direction={sort.by === by ? sort.dir : "desc"} onClick={() => setSort((x) => ({ by, dir: x.by === by && x.dir === "desc" ? "asc" : by === "name" ? "asc" : "desc" }))}>
         {label}
       </TableSortLabel>

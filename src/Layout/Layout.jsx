@@ -19,7 +19,7 @@ import Sidebar from "./Sidebar";
 import { useAuth } from "../auth/useAuth";
 import { ROLE_LABELS } from "../auth/permissions";
 import { IS_REBUILD_DATABASE, DATABASE_ID } from "../firebase";
-import { useClients } from "../data/ClientsProvider";
+import { useBook } from "../data/BookProvider";
 import { useWorkQueue } from "../data/WorkQueueProvider";
 import { BRAND } from "../theme/brand";
 
@@ -64,7 +64,8 @@ export default function Layout({ children, mode, toggleColorMode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, isEditorOrHigher, canManageUsers } = useAuth();
-  const { clients } = useClients();
+  // Prepared rows (name, case title, status, promise): no download of every client.
+  const { rows: clients } = useBook();
   const { counts } = useWorkQueue();
   const smallScreen = useMediaQuery(theme.breakpoints.down("md"));
 

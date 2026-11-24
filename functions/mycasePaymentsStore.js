@@ -228,6 +228,11 @@ function createFirestoreStore(db) {
       return { clients: updated, withPayments };
     },
 
+    /** Recompute the prepared figures pages read (functions/portfolioSnapshot.js). */
+    async refreshPortfolio() {
+      return require("./portfolioSnapshot").refreshPortfolio(db, { by: "MyCase sync" });
+    },
+
     /** Close (or reopen) clients to match their case's status in MyCase. */
     async syncCaseClosures(caseIds, opts = {}) {
       const { syncCaseClosures } = require("./caseClosures");

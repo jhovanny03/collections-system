@@ -14,7 +14,7 @@ import DownloadRounded from "@mui/icons-material/DownloadRounded";
 import { Link as RouterLink } from "react-router-dom";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import db from "../firebase";
-import { useClients } from "../data/ClientsProvider";
+import { useBook, useBookById } from "../data/BookProvider";
 import { money, clientName } from "../billing/portfolio";
 import { parseDate } from "../utils/dates";
 import { PageHeader, StatCard, Tiles, Empty } from "../ui/kit";
@@ -33,7 +33,9 @@ function csv(name, header, rows) {
 }
 
 export default function InitialPayments() {
-  const { byId, loading: clientsLoading } = useClients();
+  // Prepared rows by client id (name, case type, status, payment source).
+  const byId = useBookById();
+  const clientsLoading = !useBook().ready;
   const [cases, setCases] = useState(null);
   const [tab, setTab] = useState("client");
   const [search, setSearch] = useState("");
@@ -67,7 +69,7 @@ export default function InitialPayments() {
         date,
         days: daysSince(date),
         stage: k.caseStage || "",
-        source: c ? (c.invoiceRoles && Object.keys(c.invoiceRoles).length ? "Rebuilt from MyCase" : c.source === "mycase" ? "MyCase" : "Hand-entered") : "",
+        source: c ? c.source : "",
         status: c ? String(c.status || "active") : "",
       };
     });

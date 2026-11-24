@@ -1,26 +1,30 @@
 // src/data/ClientsProvider.jsx
-// One live copy of the clients collection for the whole app. Pages used to download
-// every client 3-5 times per visit; now they share this listener, which also keeps
-// every page current when MyCase payments arrive or a teammate edits a client.
+// The full clients collection, live, for the pages that need every client's whole record
+// (Due vs collected history, Payment allocation, Team, MyCase sync). It loads only once a
+// page asks for it (useClients()), because it is big: everyday pages read the prepared
+// figures instead (src/data/BookProvider.jsx), which is what keeps them fast.
 // Hand-entered clients with a MyCase case count MyCase payments, not typed ones
 // (src/billing/mycaseOverlay.js): in `clients` their `payments` is the MyCase list and the
 // typed list is kept as `typedPayments`. Nothing here is ever written back.
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import db from "../firebase";
 import { useAuth } from "../auth/useAuth";
-import { caseIdOf, isReceived, withMyCasePayments } from "../billing/mycaseOverlay";
+import { caseIdOf, withMyCasePayments } from "../billing/mycaseOverlay";
 
-const ClientsContext = createContext({ clients: [], loading: true, error: null, byId: new Map() });
+const EMPTY = { clients: [], loading: true, error: null, byId: new Map(), mycaseByCase: new Map(), request: () => {} };
+const ClientsContext = createContext(EMPTY);
 
 export function ClientsProvider({ children }) {
   const { user } = useAuth();
+  const [wanted, setWanted] = useState(false);
   const [state, setState] = useState({ clients: [], loading: true, error: null });
   const [mycase, setMycase] = useState(new Map());
+  const request = useCallback(() => setWanted(true), []);
 
   useEffect(() => {
-    if (!user) {
-      setState({ clients: [], loading: true, error: null });
+    if (!user || !wanted) {
+      if (!user) setState({ clients: [], loading: true, error: null });
       return undefined;
     }
     return onSnapshot(
@@ -31,12 +35,12 @@ export function ClientsProvider({ children }) {
         setState((s) => ({ ...s, loading: false, error }));
       }
     );
-  }, [user]);
+  }, [user, wanted]);
 
-  // This month's MyCase payments, by case, for the "MyCase received" total on Home
-  // (about 1,500 rows). Past months come from each client's stored `mycaseReceived`.
+  // This month's MyCase payments by case: payments the sync has not stored on a
+  // hand-entered client yet still count. Past months come from `mycaseReceived`.
   useEffect(() => {
-    if (!user) return undefined;
+    if (!user || !wanted) return undefined;
     const now = new Date();
     const first = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
     return onSnapshot(
@@ -54,32 +58,25 @@ export function ClientsProvider({ children }) {
       },
       (error) => console.error("MyCase payments listener failed:", error)
     );
-  }, [user]);
+  }, [user, wanted]);
 
   const value = useMemo(() => {
-    const clients = state.clients.map((c) => {
-      return withMyCasePayments(c, mycase.get(caseIdOf(c) || ""));
-    });
-    // This month in MyCase: all money received, and what landed on cases not in Collections.
-    const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const tracked = new Set(state.clients.filter((c) => !c.mycaseExcluded).map(caseIdOf).filter(Boolean));
-    const mycaseMonth = { ym, received: 0, count: 0, notInApp: 0, notInAppCount: 0 };
-    mycase.forEach((list, caseId) => {
-      for (const p of list) {
-        if (String(p.date || "").slice(0, 7) !== ym || !isReceived(p)) continue;
-        mycaseMonth.received += Number(p.amount);
-        mycaseMonth.count++;
-        if (!tracked.has(caseId)) {
-          mycaseMonth.notInApp += Number(p.amount);
-          mycaseMonth.notInAppCount++;
-        }
-      }
-    });
-    return { ...state, clients, byId: new Map(clients.map((c) => [c.id, c])), mycaseMonth: mycase.size ? mycaseMonth : null, mycaseByCase: mycase };
-  }, [state, mycase]);
+    const clients = state.clients.map((c) => withMyCasePayments(c, mycase.get(caseIdOf(c) || "")));
+    return { ...state, clients, byId: new Map(clients.map((c) => [c.id, c])), mycaseByCase: mycase, request };
+  }, [state, mycase, request]);
   return <ClientsContext.Provider value={value}>{children}</ClientsContext.Provider>;
 }
 
-/** { clients, loading, error, byId } — clients include unlogged MyCase payments (read-only). */
-export const useClients = () => useContext(ClientsContext);
+/**
+ * Every client's full record (live). Asking for it starts the download, so call it only
+ * on pages that need whole records; pass { enabled: false } to read without starting it.
+ * { clients, loading, error, byId }
+ */
+export function useClients({ enabled = true } = {}) {
+  const ctx = useContext(ClientsContext);
+  const { request } = ctx;
+  useEffect(() => {
+    if (enabled) request();
+  }, [enabled, request]);
+  return ctx;
+}

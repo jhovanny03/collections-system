@@ -483,7 +483,16 @@ async function runAll({ store, baseUrl, token, fetchImpl, log = console }) {
   // A case closed (or reopened) in MyCase closes (or reopens) its client here.
   const closures = store.syncCaseClosures ? await store.syncCaseClosures([...touched]) : null;
   const linkIssues = store.refreshLinkIssues ? await store.refreshLinkIssues() : null;
-  const stats = { cases: cases.rows, invoices: invoices.rows, casesRefreshed: touched.size, needsSetup: flagged, autoCreated, payments, mycaseReceived: received, closures: closures && { closed: closures.closed, reopened: closures.reopened, filed: closures.filed }, phones, linkIssues };
+  // Last: the prepared figures for Home and the lists, from everything above.
+  let portfolio = null;
+  if (store.refreshPortfolio) {
+    try {
+      portfolio = await store.refreshPortfolio();
+    } catch (e) {
+      if (log.warn) log.warn("Portfolio figures not refreshed:", e.message);
+    }
+  }
+  const stats = { cases: cases.rows, invoices: invoices.rows, casesRefreshed: touched.size, needsSetup: flagged, autoCreated, payments, mycaseReceived: received, closures: closures && { closed: closures.closed, reopened: closures.reopened, filed: closures.filed }, phones, linkIssues, portfolio };
   if (log.info) log.info("MyCase sync", stats);
   return stats;
 }

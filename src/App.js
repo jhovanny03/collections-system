@@ -14,6 +14,7 @@ import db from "./firebase";
 import { createAppTheme } from "./theme/brand";
 import { ClientsProvider } from "./data/ClientsProvider";
 import { WorkQueueProvider } from "./data/WorkQueueProvider";
+import { BookProvider } from "./data/BookProvider";
 
 import Layout from "./Layout/Layout";
 
@@ -51,11 +52,13 @@ function App() {
   return (
     <AuthProvider>
       <ClientsProvider>
-        <WorkQueueProvider>
-          <Router>
-            <ThemeAndRoutes />
-          </Router>
-        </WorkQueueProvider>
+        <BookProvider>
+          <WorkQueueProvider>
+            <Router>
+              <ThemeAndRoutes />
+            </Router>
+          </WorkQueueProvider>
+        </BookProvider>
       </ClientsProvider>
     </AuthProvider>
   );

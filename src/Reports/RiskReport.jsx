@@ -11,9 +11,9 @@ import {
 import DownloadRounded from "@mui/icons-material/DownloadRounded";
 import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import { Link as RouterLink } from "react-router-dom";
-import { useClients } from "../data/ClientsProvider";
-import { usePortfolio, money, monthLabel } from "../billing/portfolio";
-import { writeOffRisk, planHealth, HEALTH } from "../billing/insights";
+import { useInsights } from "../data/BookProvider";
+import { money, monthLabel } from "../billing/portfolio";
+import { HEALTH } from "../billing/insights";
 import { StatCard, Tiles } from "../ui/kit";
 
 function csv(name, header, rows) {
@@ -183,12 +183,12 @@ function Health({ health, loading }) {
 }
 
 export default function RiskReport() {
-  const { clients, loading } = useClients();
-  const { rows } = usePortfolio(clients);
+  // Prepared on the server with the other figures (src/data/BookProvider.jsx useInsights).
+  const insights = useInsights();
+  const loading = !insights;
   const [view, setView] = useState("health");
-  const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-  const risk = useMemo(() => writeOffRisk(clients, byId, 6), [clients, byId]);
-  const health = useMemo(() => planHealth(clients, byId), [clients, byId]);
+  const risk = insights ? insights.risk : [];
+  const health = insights ? insights.health : [];
   return (
     <Box>
       <Card sx={{ mb: 2.5, px: 1 }}>

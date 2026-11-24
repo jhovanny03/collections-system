@@ -21,10 +21,9 @@ import FollowUpsCalendarView from "./FollowUpsCalendarView";
 import FollowUpsInsightsView from "./FollowUpsInsightsView";
 import { savePaymentPromise } from "../ClientDashboard/PaymentPromise";
 import { PageHeader, StatCard, Tiles, Empty } from "../ui/kit";
-import { useClients } from "../data/ClientsProvider";
-import { usePortfolio } from "../billing/portfolio";
+import { useBook } from "../data/BookProvider";
 import { liveItems } from "./liveFollowUps";
-import { lastContactOf, callLink, displayPhone, ago } from "../billing/contact";
+import { callLink, displayPhone, ago } from "../billing/contact";
 import PhoneRounded from "@mui/icons-material/PhoneRounded";
 
 const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -90,8 +89,9 @@ function rowNote(row) {
 }
 
 export default function FollowUps() {
-  const { byId, clients } = useClients();
-  const { rows } = usePortfolio(clients);
+  // Prepared rows (phones, last call, last contact are on each row): no download of every client.
+  const { rows } = useBook();
+  const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
   const [months, setMonths] = useState([thisMonth()]);
   const [cohortId, setCohortId] = useState(thisMonth());
   const [items, setItems] = useState(null);
@@ -385,7 +385,7 @@ export default function FollowUps() {
                         {(() => {
                           // RingCentral calls and calls logged here, whichever is newer.
                           const c = byId.get(row.id);
-                          const lc = c ? lastContactOf(c) : null;
+                          const lc = c ? c.lastContact : null;
                           if (!lc) return <Typography variant="body2" color="text.disabled">—</Typography>;
                           const stale = Date.now() - lc.at.getTime() > 30 * 864e5;
                           return (

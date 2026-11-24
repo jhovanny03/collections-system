@@ -13,12 +13,12 @@ import DeleteOutlineRounded from "@mui/icons-material/DeleteOutlineRounded";
 import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import DownloadRounded from "@mui/icons-material/DownloadRounded";
 import { Link as RouterLink } from "react-router-dom";
-import { doc, deleteDoc } from "firebase/firestore";
+import { doc, deleteDoc, getDoc } from "firebase/firestore";
 import db from "./firebase";
 import EditClient from "./EditClient.jsx";
 import { useAuth } from "./auth/useAuth";
-import { useClients } from "./data/ClientsProvider";
-import { usePortfolio, money } from "./billing/portfolio";
+import { useBook } from "./data/BookProvider";
+import { money } from "./billing/portfolio";
 import { PageHeader } from "./ui/kit";
 import { ago, callLink, displayPhone } from "./billing/contact";
 import PhoneRounded from "@mui/icons-material/PhoneRounded";
@@ -66,9 +66,13 @@ function statusChip(r) {
 
 export default function ClientList() {
   const { isEditorOrHigher, canManageUsers } = useAuth();
-  const { clients, loading } = useClients();
-  const { rows } = usePortfolio(clients);
-  const byId = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
+  // Prepared rows (src/data/BookProvider.jsx); the full record is read only to edit it.
+  const { rows, ready } = useBook();
+  const loading = !ready;
+  const openEditor = async (id) => {
+    const s = await getDoc(doc(db, "clients", id));
+    if (s.exists()) setEditing({ id: s.id, ...s.data() });
+  };
 
   const [view, setView] = useState("all");
   const [search, setSearch] = useState("");
@@ -231,7 +235,7 @@ export default function ClientList() {
                     )}
                     {isEditorOrHigher() && (
                       <Tooltip title="Edit name and case">
-                        <IconButton size="small" onClick={() => setEditing(byId.get(r.id))}><EditRounded fontSize="small" /></IconButton>
+                        <IconButton size="small" onClick={() => openEditor(r.id)}><EditRounded fontSize="small" /></IconButton>
                       </Tooltip>
                     )}
                     {canManageUsers() && (

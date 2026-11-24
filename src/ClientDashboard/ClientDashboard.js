@@ -7,14 +7,13 @@ import { Box, Button, Card, Chip, LinearProgress, Stack, Tab, Tabs, Typography, 
 import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import ArrowBackRounded from "@mui/icons-material/ArrowBackRounded";
 import db from "../firebase";
-import { doc, onSnapshot } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, where } from "firebase/firestore";
 import { useAuth } from "../auth/useAuth";
 import { clientRows, money } from "../billing/portfolio";
 import { describeSchedule, sortedPlans, planSchedule } from "../billing/plans";
 import { StatCard, Tiles } from "../ui/kit";
 import { callLink, displayPhone, ago } from "../billing/contact";
 import PhoneRounded from "@mui/icons-material/PhoneRounded";
-import { useClients } from "../data/ClientsProvider";
 import { withMyCasePayments, caseIdOf } from "../billing/mycaseOverlay";
 
 import InvoiceSection from "../InvoiceSection";
@@ -62,8 +61,20 @@ function ClientDashboard() {
   // MyCase payments on this case that nobody typed in yet (hand-entered clients): they
   // count in the figures here like everywhere else; the team still logs them below.
   // Worked out from the live client, so a payment typed in a moment ago matches at once.
-  const { mycaseByCase } = useClients();
-  const billing = useMemo(() => (client ? withMyCasePayments(client, mycaseByCase?.get(caseIdOf(client) || "")) : null), [client, mycaseByCase]);
+  // This month's MyCase payments on this case only (live), for any the sync has not stored yet.
+  const caseId = client ? caseIdOf(client) : null;
+  const [caseLive, setCaseLive] = useState([]);
+  useEffect(() => {
+    if (!caseId) return setCaseLive([]);
+    const now = new Date();
+    const first = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    return onSnapshot(
+      query(collection(db, "mycasePayments"), where("caseId", "==", caseId)),
+      (s) => setCaseLive(s.docs.map((d) => ({ id: String(d.data().id || d.id), ...d.data() })).filter((p) => String(p.date || "") >= first)),
+      () => setCaseLive([])
+    );
+  }, [caseId]);
+  const billing = useMemo(() => (client ? withMyCasePayments(client, caseLive) : null), [client, caseLive]);
   const row = useMemo(() => (billing ? clientRows([billing])[0] : null), [billing]);
   // Hand-entered client counted from MyCase: how the typed payments compare.
   const fromMyCase = billing && billing.typedPayments ? {

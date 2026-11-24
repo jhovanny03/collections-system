@@ -8,8 +8,7 @@ import { useTheme } from "@mui/material/styles";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { collection, getDocs } from "firebase/firestore";
 import db from "../firebase";
-import { useClients } from "../data/ClientsProvider";
-import { agingTrend } from "../billing/insights";
+import { useInsights } from "../data/BookProvider";
 import { money, monthLabel } from "../billing/portfolio";
 import { Section } from "../ui/kit";
 
@@ -19,16 +18,11 @@ const COLORS_DARK = ["#E0B03C", "#F29A7A", "#EE7A55", "#EF6B6B"];
 export default function AgingTrend() {
   const theme = useTheme();
   const colors = theme.palette.mode === "dark" ? COLORS_DARK : COLORS_LIGHT;
-  const { clients } = useClients();
-  const [history, setHistory] = useState(null);
+  // Prepared on the server with the other figures (src/data/BookProvider.jsx useInsights).
+  const insights = useInsights();
+  const history = insights ? insights.agingTrend : null;
   const [saved, setSaved] = useState({});
 
-  // Rebuilding a year of history takes a moment: do it after the page has drawn.
-  useEffect(() => {
-    if (!clients.length) return undefined;
-    const t = setTimeout(() => setHistory(agingTrend(clients, 12)), 50);
-    return () => clearTimeout(t);
-  }, [clients]);
 
   useEffect(() => {
     getDocs(collection(db, "agingSnapshots"))

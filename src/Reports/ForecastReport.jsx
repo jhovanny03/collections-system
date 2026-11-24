@@ -1,12 +1,11 @@
 // src/Reports/ForecastReport.jsx
 // What should come in over the next 3 months: installments the plans schedule (minus
 // anything already paid ahead), and a likely figure from how each group has paid lately.
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Alert, Box, LinearProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { BarChart } from "@mui/x-charts/BarChart";
-import { useClients } from "../data/ClientsProvider";
-import { collectionForecast } from "../billing/insights";
+import { useInsights } from "../data/BookProvider";
 import { money, pct, monthLabel } from "../billing/portfolio";
 import { chartColors } from "../theme/brand";
 import { StatCard, Section, Tiles } from "../ui/kit";
@@ -14,14 +13,9 @@ import { StatCard, Section, Tiles } from "../ui/kit";
 export default function ForecastReport() {
   const theme = useTheme();
   const colors = chartColors(theme.palette.mode);
-  const { clients } = useClients();
-  const [f, setF] = useState(null);
-
-  useEffect(() => {
-    if (!clients.length) return undefined;
-    const t = setTimeout(() => setF(collectionForecast(clients, 3)), 50);
-    return () => clearTimeout(t);
-  }, [clients]);
+  // Prepared on the server with the other figures (src/data/BookProvider.jsx useInsights).
+  const insights = useInsights();
+  const f = insights ? insights.forecast : null;
 
   if (!f) {
     return (

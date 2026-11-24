@@ -7,8 +7,8 @@ import { useTheme } from "@mui/material/styles";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { LineChart } from "@mui/x-charts/LineChart";
 import { Link as RouterLink } from "react-router-dom";
-import { useClients } from "../data/ClientsProvider";
-import { usePortfolio, collectionsByMonth, collectionRateByMonth, money, pct } from "../billing/portfolio";
+import { useBook } from "../data/BookProvider";
+import { money, pct } from "../billing/portfolio";
 import { chartColors } from "../theme/brand";
 import { StatCard, Section, Tiles } from "../ui/kit";
 
@@ -28,12 +28,13 @@ function downloadCsv(name, header, rows) {
 export default function ReportsOverview() {
   const theme = useTheme();
   const colors = chartColors(theme.palette.mode);
-  const { clients, loading } = useClients();
-  const { rows, payments, summary: s } = usePortfolio(clients);
+  // Prepared figures: rows, totals, and the 12-month series (src/data/BookProvider.jsx).
+  const { rows, summary: s, byMonth, months: rateAll, ready } = useBook();
+  const loading = !ready;
   const [rateMonths, setRateMonths] = useState(6);
 
-  const months = useMemo(() => collectionsByMonth(payments, 12), [payments]);
-  const rate = useMemo(() => (clients.length ? collectionRateByMonth(clients, rateMonths) : []), [clients, rateMonths]);
+  const months = byMonth;
+  const rate = useMemo(() => rateAll.slice(-rateMonths), [rateAll, rateMonths]);
 
   const plan = useMemo(() => rows.filter((r) => r.status !== "closed" && r.inPlan && r.status !== "paused" && (r.balance > 0 || r.amountDue > 0)), [rows]);
   const pastDue = useMemo(() => plan.filter((r) => r.amountDue > 0), [plan]);

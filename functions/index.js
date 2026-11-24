@@ -733,8 +733,18 @@ exports.importRingCentralCalls = onSchedule(
     const since = new Date(Date.now() - 90 * 864e5).toISOString();
     const r = await importCalls(appDb(), { token, since, admin });
     console.log("RingCentral calls", r);
+    // New calls change last contact and follow-up statuses: refresh the prepared figures.
+    if (r.clientsUpdated) console.log("Portfolio", await require("./portfolioSnapshot").refreshPortfolio(appDb(), { by: "RingCentral" }));
   }
 );
+
+/* Home "Refresh": recompute the prepared figures now (after a pause, a skip, a plan change). */
+exports.refreshPortfolioNow = functions
+  .runWith({ timeoutSeconds: 300, memory: "1GB" })
+  .https.onCall(async (data, context) => {
+    const email = await requireEditor(context);
+    return require("./portfolioSnapshot").refreshPortfolio(appDb(), { by: email });
+  });
 
 
 exports.importMyCasePayments = onSchedule(

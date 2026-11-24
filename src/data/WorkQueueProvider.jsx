@@ -6,7 +6,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { collection, doc, getCountFromServer, onSnapshot, query, where } from "firebase/firestore";
 import db from "../firebase";
 import { useAuth } from "../auth/useAuth";
-import { useClients } from "./ClientsProvider";
+import { useBook } from "./BookProvider";
 
 const WorkQueueContext = createContext({ counts: {}, loading: true, refresh: () => {} });
 
@@ -21,7 +21,8 @@ const promiseDay = (p) => {
 
 export function WorkQueueProvider({ children }) {
   const { user, isEditorOrHigher } = useAuth();
-  const { clients } = useClients();
+  // Prepared rows (name, case title, status, promise): no download of every client.
+  const { rows: clients } = useBook();
   const [server, setServer] = useState({ loading: true });
   const [cohort, setCohort] = useState(null);
   const canWork = !!user && isEditorOrHigher();

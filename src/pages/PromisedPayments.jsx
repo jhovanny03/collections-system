@@ -18,8 +18,8 @@ import dayGridPlugin from "@fullcalendar/daygrid";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 import { collection, getDocs } from "firebase/firestore";
 import db from "../firebase";
-import { useClients } from "../data/ClientsProvider";
-import { usePortfolio, money, clientName } from "../billing/portfolio";
+import { useBook } from "../data/BookProvider";
+import { money, clientName } from "../billing/portfolio";
 import { parseDate } from "../utils/dates";
 import { PageHeader, StatCard, Tiles, Empty } from "../ui/kit";
 
@@ -67,8 +67,10 @@ function promiseStatus(promise, payments, today) {
 export default function PromisedPayments() {
   const theme = useTheme();
   const navigate = useNavigate();
-  const { clients, loading } = useClients();
-  const { rows } = usePortfolio(clients);
+  // Prepared rows: each client with a promise carries the payments around it (promisePayments).
+  const { rows, ready } = useBook();
+  const loading = !ready;
+  const clients = rows;
   const [tab, setTab] = useState("upcoming");
   const [search, setSearch] = useState("");
   const [missedWhen, setMissedWhen] = useState("month"); // month | older | all
@@ -90,7 +92,7 @@ export default function PromisedPayments() {
       const date = parseDate(pr?.date);
       if (!pr || !date || !Number(pr.amount)) continue;
       if (String(c.status || "").toLowerCase() === "closed") continue;
-      const st = promiseStatus(pr, c.payments, today);
+      const st = promiseStatus(pr, c.promisePayments || c.payments, today);
       out.push({
         id: c.id,
         name: clientName(c),

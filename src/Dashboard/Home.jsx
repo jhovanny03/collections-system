@@ -1,7 +1,7 @@
 // src/Dashboard/Home.jsx
 // Home: today at a glance. What needs attention, the numbers that matter, recent money.
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Button, Chip, Divider, LinearProgress, List, ListItemButton, ListItemText, Typography } from "@mui/material";
+import { Box, Button, Chip, Divider, LinearProgress, List, ListItemButton, ListItemText, Stack, Typography } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { BarChart } from "@mui/x-charts/BarChart";
 import { Link as RouterLink } from "react-router-dom";
@@ -17,9 +17,9 @@ import SyncRounded from "@mui/icons-material/SyncRounded";
 import AccountBalanceWalletRounded from "@mui/icons-material/AccountBalanceWalletRounded";
 import db from "../firebase";
 import { useAuth } from "../auth/useAuth";
-import { useClients } from "../data/ClientsProvider";
+import { useBook } from "../data/BookProvider";
 import { useWorkQueue } from "../data/WorkQueueProvider";
-import { usePortfolio, collectionRateByMonth, money, pct, monthLabel } from "../billing/portfolio";
+import { money, pct, monthLabel } from "../billing/portfolio";
 import { chartColors } from "../theme/brand";
 import { PageHeader, StatCard, Section, Tiles, Empty } from "../ui/kit";
 import { parseDate } from "../utils/dates";
@@ -56,14 +56,14 @@ export default function Home() {
   const theme = useTheme();
   const colors = chartColors(theme.palette.mode);
   const { user, isEditorOrHigher } = useAuth();
-  const { clients, loading, mycaseMonth } = useClients();
+  // Prepared figures (src/data/BookProvider.jsx): no download of every client.
+  const { summaryReady, rows, recent: payments, summary: s, months, mycaseMonth, generatedAt, refresh, refreshing, source } = useBook();
+  // The cards and charts need only the summary; lists built from rows fill in a moment later.
+  const loading = !summaryReady;
   const { counts } = useWorkQueue();
-  const { rows, payments, summary: s } = usePortfolio(clients);
   const lastSync = useLastSync();
   const editor = isEditorOrHigher();
 
-  // Due vs collected each month, clients up to date going into the month (roll-over rule).
-  const months = useMemo(() => (clients.length ? collectionRateByMonth(clients, 12) : []), [clients]);
   const monthName = monthLabel(s.month.key, "long").split(" ")[0];
   const pastThe15th = new Date().getDate() >= 15;
   const recent = payments.filter((p) => p.amount > 0).slice(0, 8);
@@ -96,12 +96,22 @@ export default function Home() {
         title={`${greeting()}${firstName ? `, ${firstName}` : ""}`}
         subtitle={new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
         actions={
-          <Chip
-            icon={<SyncRounded />}
-            label={`MyCase synced ${ago(lastSync)}`}
-            color={lastSync && Date.now() - lastSync.getTime() < 3 * 3600e3 ? "success" : "warning"}
-            variant="outlined"
-          />
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Chip
+              icon={<SyncRounded />}
+              label={`MyCase synced ${ago(lastSync)}`}
+              color={lastSync && Date.now() - lastSync.getTime() < 3 * 3600e3 ? "success" : "warning"}
+              variant="outlined"
+            />
+            {source === "prepared" && (
+              <Chip
+                label={refreshing ? "Updating figures…" : `Figures as of ${generatedAt ? generatedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—"} · Refresh`}
+                onClick={editor && !refreshing ? () => refresh().catch((e) => alert(`Could not refresh: ${e.message}`)) : undefined}
+                variant="outlined"
+                title="Figures are prepared on the server after each MyCase sync and RingCentral import. Refresh after pausing, skipping or changing a plan to see it here right away."
+              />
+            )}
+          </Stack>
         }
       />
       {loading && <LinearProgress sx={{ mb: 2 }} />}
@@ -236,7 +246,7 @@ export default function Home() {
             <List dense disablePadding>
               {promisesToday.slice(0, 8).map((c) => (
                 <ListItemButton key={c.id} component={RouterLink} to={`/client/${c.id}`} sx={{ px: 2.25 }}>
-                  <ListItemText primary={`${c.firstName || ""} ${c.lastName || ""}`.trim()} secondary={c.paymentPromise?.notes || "—"} primaryTypographyProps={{ fontWeight: 700 }} secondaryTypographyProps={{ noWrap: true }} />
+                  <ListItemText primary={c.name || `${c.firstName || ""} ${c.lastName || ""}`.trim()} secondary={c.paymentPromise?.notes || "—"} primaryTypographyProps={{ fontWeight: 700 }} secondaryTypographyProps={{ noWrap: true }} />
                   <Typography fontWeight={800}>{money(c.paymentPromise?.amount)}</Typography>
                 </ListItemButton>
               ))}
