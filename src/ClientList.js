@@ -20,6 +20,8 @@ import { useAuth } from "./auth/useAuth";
 import { useClients } from "./data/ClientsProvider";
 import { usePortfolio, money } from "./billing/portfolio";
 import { PageHeader } from "./ui/kit";
+import { ago, callLink, displayPhone } from "./billing/contact";
+import PhoneRounded from "@mui/icons-material/PhoneRounded";
 
 /** "A(11-26) • SPOUSE I-360+AOS • QUE" from a long MyCase case title. */
 function compactCaseTag(title, name) {
@@ -37,6 +39,7 @@ const VIEWS = [
   { key: "pastdue", label: "Past due", test: (r) => r.amountDue > 0 && r.status === "active" && r.inPlan },
   { key: "ended", label: "Plan ended, still owes", test: (r) => r.planEnded && r.status === "active" && r.inPlan },
   { key: "current", label: "Current", test: (r) => r.inPlan && r.amountDue <= 0 && r.balance > 0 && r.status === "active" },
+  { key: "nocontact", label: "No contact in 30+ days", test: (r) => r.needsContact },
   { key: "waiting", label: "Waiting for a plan", test: (r) => r.awaitingPlan && r.status !== "closed" },
   { key: "paused", label: "Paused", test: (r) => r.status === "paused" },
   { key: "hold", label: "On hold", test: (r) => r.onHold },
@@ -165,7 +168,7 @@ export default function ClientList() {
             {caseTypes.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
           </TextField>
           <TextField select label="Source" value={source} onChange={(e) => reset(setSource)(e.target.value)} sx={{ minWidth: 200 }}>
-            {["Any", "MyCase", "Rebuilt from MyCase", "Hand-entered"].map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+            {["Any", "MyCase", "Rebuilt from MyCase", "MyCase, invoices to tag", "Typed by hand"].map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
           </TextField>
         </Stack>
         {loading && <LinearProgress />}
@@ -179,6 +182,7 @@ export default function ClientList() {
                 {head("amountDue", "Owed now", "right")}
                 {head("balance", "Balance left", "right")}
                 {head("lastPayment", "Last payment")}
+                <TableCell>Last contact</TableCell>
                 <TableCell>Promise</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
@@ -206,8 +210,20 @@ export default function ClientList() {
                       </>
                     ) : "—"}
                   </TableCell>
+                  <TableCell>
+                    {r.lastContact ? (
+                      <Typography variant="body2" color={r.needsContact ? "error.main" : "text.primary"}>{ago(r.lastContact.at)}</Typography>
+                    ) : (
+                      <Typography variant="body2" color={r.needsContact ? "error.main" : "text.disabled"}>Never</Typography>
+                    )}
+                  </TableCell>
                   <TableCell>{r.promise?.date ? <Chip size="small" variant="outlined" label={`${money(r.promise.amount)} on ${String(r.promise.date).slice(0, 10)}`} /> : "—"}</TableCell>
                   <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                    {r.phones?.[0] && (
+                      <Tooltip title={`Call ${displayPhone(r.phones[0])} with RingCentral`}>
+                        <IconButton size="small" color="primary" href={callLink(r.phones[0])}><PhoneRounded fontSize="small" /></IconButton>
+                      </Tooltip>
+                    )}
                     {r.myCaseLink && (
                       <Tooltip title="Open in MyCase">
                         <IconButton size="small" href={r.myCaseLink} target="_blank" rel="noopener noreferrer"><OpenInNewRounded fontSize="small" /></IconButton>
@@ -227,7 +243,7 @@ export default function ClientList() {
                 </TableRow>
               ))}
               {!loading && list.length === 0 && (
-                <TableRow><TableCell colSpan={8} align="center" sx={{ py: 5 }}>No clients match. Try another view or clear the search.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} align="center" sx={{ py: 5 }}>No clients match. Try another view or clear the search.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>

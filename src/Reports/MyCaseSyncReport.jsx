@@ -89,7 +89,7 @@ export default function MyCaseSyncReport() {
 
   const last = syncAt.payments;
   const fresh = last && Date.now() - last.getTime() < 3 * 3600e3;
-  const auto = (coverage.by["MyCase"] || 0) + (coverage.by["Rebuilt from MyCase"] || 0);
+  const auto = (coverage.by["MyCase"] || 0) + (coverage.by["Rebuilt from MyCase"] || 0) + (coverage.by["MyCase, invoices to tag"] || 0);
 
   return (
     <Box>
@@ -119,7 +119,8 @@ export default function MyCaseSyncReport() {
               {[
                 ["MyCase", "Created from MyCase (new intake)", "success"],
                 ["Rebuilt from MyCase", "History rebuilt from MyCase", "success"],
-                ["Hand-entered", "Typed in by hand (payments typed too)", "warning"],
+                ["MyCase, invoices to tag", "Payments from MyCase; invoices still to tag (Case Setup)", "info"],
+                ["Typed by hand", "No MyCase case link: payments typed by hand", "warning"],
               ].map(([k, label, color]) => (
                 <TableRow key={k}>
                   <TableCell>

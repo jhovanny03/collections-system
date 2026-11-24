@@ -256,7 +256,7 @@ export default function RecordPayment({ client, setClient }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleteIndex, setDeleteIndex] = useState(null);
 
-  const payments = client?.payments || [];
+  const payments = useMemo(() => client?.payments || [], [client?.payments]);
   const paymentsForTable = useMemo(() => {
     return [...payments].sort((a, b) => asDate(b.date) - asDate(a.date));
   }, [payments]);

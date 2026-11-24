@@ -69,9 +69,10 @@ export default function AgingReport() {
 
   const exportCsv = () => {
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const header = ["Client", "Case title", "Case type", "Status", "Source", ...AGING_BUCKETS.map((b) => b.label), "Total", "Last payment"];
-    const body = list.map((r) => [r.name, r.caseTitle, r.caseType, r.status, r.source, ...KEYS.map((k) => r.aging[k].toFixed(2)), r.aging.total.toFixed(2), r.lastPayment?.date || ""]);
-    body.push(["TOTAL", "", "", "", "", ...KEYS.map((k) => totals[k].toFixed(2)), totals.total.toFixed(2), ""]);
+    // Bucket = by client (oldest unpaid month). The by-installment split is added for the accountant.
+    const header = ["Client", "Case title", "Case type", "Status", "Source", ...AGING_BUCKETS.map((b) => b.label), "Total", ...AGING_BUCKETS.map((b) => `By installment ${b.label}`), "Last payment"];
+    const body = list.map((r) => [r.name, r.caseTitle, r.caseType, r.status, r.source, ...KEYS.map((k) => r.aging[k].toFixed(2)), r.aging.total.toFixed(2), ...KEYS.map((k) => (r.agingByInstallment?.[k] || 0).toFixed(2)), r.lastPayment?.date || ""]);
+    body.push(["TOTAL", "", "", "", "", ...KEYS.map((k) => totals[k].toFixed(2)), totals.total.toFixed(2), ...KEYS.map(() => ""), ""]);
     const url = URL.createObjectURL(new Blob([[header, ...body].map((x) => x.map(esc).join(",")).join("\n")], { type: "text/csv" }));
     const a = document.createElement("a");
     a.href = url;
@@ -129,7 +130,7 @@ export default function AgingReport() {
             {caseTypes.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
           </TextField>
           <TextField select label="Source" value={source} onChange={(e) => reset(setSource)(e.target.value)} sx={{ minWidth: 170 }}>
-            {["Any", "MyCase", "Rebuilt from MyCase", "Hand-entered"].map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+            {["Any", "MyCase", "Rebuilt from MyCase", "MyCase, invoices to tag", "Typed by hand"].map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
           </TextField>
           <Button startIcon={<DownloadRounded />} onClick={exportCsv} disabled={!list.length}>CSV</Button>
         </Stack>
@@ -178,7 +179,7 @@ export default function AgingReport() {
         <TablePagination component="div" count={list.length} page={page} onPageChange={(_, p) => setPage(p)} rowsPerPage={perPage} onRowsPerPageChange={(e) => reset(setPerPage)(parseInt(e.target.value, 10))} rowsPerPageOptions={[25, 50, 100, 250]} />
       </Card>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5 }}>
-        Each unpaid installment ages from the 1st of its month; payments always go to the oldest installment first. This month's installment is in 0–30 days whether or not the 15th has passed. Closed clients are excluded.
+        Each client sits in one bucket, set by their oldest unpaid installment (aged from the 1st of its month), with everything they owe; payments always go to the oldest installment first, so a client who pays their oldest month moves to a newer bucket right away. The CSV also has the split installment by installment. Closed clients are excluded.
       </Typography>
     </Box>
   );

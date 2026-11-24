@@ -33,6 +33,7 @@ import {
 } from "firebase/firestore";
 import db from "../firebase";
 import { asDate, formatDate } from "../utils/dates";
+import { callsByClient, creditFor, CREDIT_DAYS } from "../billing/callCredit";
 
 // ---------- helpers ----------
 const toMoney = (n) =>
@@ -195,6 +196,7 @@ export default function PaymentHistoryReport() {
       mounted = false;
     };
     // refresh digest when server-side filters change
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildPaymentsQuery only reads the filters listed here
   }, [recordedByFilter, caseTypeFilter]);
 
   // ----- Table loader (range-selected + server-side filters) -----
@@ -231,7 +233,28 @@ export default function PaymentHistoryReport() {
     return () => {
       mounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- buildPaymentsQuery only reads the filters listed here
   }, [startDate, endDate, recordedByFilter, caseTypeFilter]);
+
+  // "After a call by": RingCentral call that reached the client up to CREDIT_DAYS days before
+  // the payment (src/billing/callCredit.js). Initial payments are left out.
+  const [credit, setCredit] = useState(new Map());
+  useEffect(() => {
+    let alive = true;
+    const days = rows.map((r) => String(r.paymentDate || "").slice(0, 10)).filter(Boolean).sort();
+    if (!days.length) { setCredit(new Map()); return undefined; }
+    const since = new Date(`${days[0]}T00:00:00`);
+    since.setDate(since.getDate() - CREDIT_DAYS);
+    const until = new Date(`${days[days.length - 1]}T23:59:59`);
+    getDocs(query(collection(db, "ringcentralCalls"), where("at", ">=", since.toISOString()), where("at", "<=", until.toISOString())))
+      .then((snap) => {
+        if (!alive) return;
+        const byClient = callsByClient(snap.docs.map((d) => d.data()));
+        setCredit(new Map(rows.map((r) => [r.id, creditFor({ clientId: r.clientId, date: String(r.paymentDate || "").slice(0, 10), initial: r.kind === "initial" }, byClient)])));
+      })
+      .catch(() => alive && setCredit(new Map()));
+    return () => { alive = false; };
+  }, [rows]);
 
   // Options for dropdowns (derived from currently loaded rows)
   const recordedByOptions = useMemo(() => {
@@ -282,6 +305,7 @@ export default function PaymentHistoryReport() {
       "Recorded By",
       "Recorded At",
       "Source",
+      "After a call by",
       "Payment Doc ID",
     ];
 
@@ -302,6 +326,7 @@ export default function PaymentHistoryReport() {
           r.recordedBy || "",
           r.recordedAt || "",
           r.source || "manual",
+          credit.get(r.id)?.by || "",
           r.id || "",
         ]
           .map(toCsvValue)
@@ -541,6 +566,7 @@ export default function PaymentHistoryReport() {
                     <TableCell sx={{ fontWeight: 800 }}>Case</TableCell>
                     <TableCell sx={{ fontWeight: 800 }}>Recorded By</TableCell>
                     <TableCell sx={{ fontWeight: 800 }}>Source</TableCell>
+                    <TableCell sx={{ fontWeight: 800 }}>After a call by</TableCell>
                   </TableRow>
                 </TableHead>
 
@@ -572,12 +598,24 @@ export default function PaymentHistoryReport() {
                           label={r.source || "manual"}
                         />
                       </TableCell>
+                      <TableCell>
+                        {credit.get(r.id) ? (
+                          <Typography variant="body2" fontWeight={700} title={`Talked with the client ${credit.get(r.id).daysBefore ? `${credit.get(r.id).daysBefore} day(s)` : "the same day"} before this payment (RingCentral)`}>
+                            {credit.get(r.id).by}
+                            <Typography component="span" variant="caption" color="text.secondary">
+                              {credit.get(r.id).daysBefore ? ` · ${credit.get(r.id).daysBefore}d before` : " · same day"}
+                            </Typography>
+                          </Typography>
+                        ) : (
+                          <Typography variant="body2" color="text.disabled">—</Typography>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
 
                   {filteredRows.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={7}>
                         <Box
                           sx={{
                             py: 3,

@@ -9,6 +9,7 @@ import SpaceDashboardRounded from "@mui/icons-material/SpaceDashboardRounded";
 import PeopleAltRounded from "@mui/icons-material/PeopleAltRounded";
 import PhoneInTalkRounded from "@mui/icons-material/PhoneInTalkRounded";
 import EventAvailableRounded from "@mui/icons-material/EventAvailableRounded";
+import AccountBalanceWalletRounded from "@mui/icons-material/AccountBalanceWalletRounded";
 import PlaylistAddCheckRounded from "@mui/icons-material/PlaylistAddCheckRounded";
 import RuleRounded from "@mui/icons-material/RuleRounded";
 import InsightsRounded from "@mui/icons-material/InsightsRounded";
@@ -45,6 +46,7 @@ function useSections() {
       items: [
         { text: "Follow-ups", icon: <PhoneInTalkRounded />, to: "/follow-ups", badge: counts.followUpsOpen, hint: "Clients who missed this month's payment" },
         { text: "Promised payments", icon: <EventAvailableRounded />, to: "/promised-payments", badge: counts.promisesToday, hint: "Promises due today and coming up" },
+        { text: "Initial payments", icon: <AccountBalanceWalletRounded />, to: "/initial-payments", badge: counts.initialOpen, hint: "Initial payments not paid in full in MyCase" },
         { text: "Case Setup", icon: <PlaylistAddCheckRounded />, to: "/case-setup", badge: counts.caseSetupTotal, hint: "New MyCase cases, plans to set and links to fix" },
         { text: "MyCase Review", icon: <RuleRounded />, to: "/mycase-review", badge: counts.reviewOpen, hint: "MyCase payments the sync could not place on its own" },
         ...(FEATURES.createClient ? [{ text: "Create client", icon: <PersonAddAlt1Rounded />, to: "/create-client" }] : []),

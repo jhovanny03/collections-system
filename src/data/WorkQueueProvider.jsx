@@ -37,14 +37,18 @@ export function WorkQueueProvider({ children }) {
       }
     };
     const cases = collection(db, "mycaseCases");
-    const [newCases, waitingPlan, toTag, reviewOpen, linkProblems] = await Promise.all([
+    const [newCases, waitingPlan, toTag, reviewOpen, linkProblems, initialClients, initialStarted] = await Promise.all([
       count(query(cases, where("needsSetup", "==", true), where("setupGroup", "==", "client"))),
       count(query(cases, where("needsPlan", "==", true))),
       count(query(cases, where("needsTagging", "==", true))),
       count(query(collection(db, "mycasePaymentReview"), where("status", "==", "open"))),
       count(collection(db, "mycaseLinkIssues")),
+      count(query(cases, where("initialState", "==", "client"))),
+      count(query(cases, where("initialState", "==", "started"))),
     ]);
-    setServer({ loading: false, newCases, waitingPlan, toTag, reviewOpen, linkProblems, at: new Date() });
+    // Initial payments not completed: clients in Collections + new cases that started paying.
+    const initialOpen = (initialClients || 0) + (initialStarted || 0);
+    setServer({ loading: false, newCases, waitingPlan, toTag, reviewOpen, linkProblems, initialOpen, at: new Date() });
   }, [canWork]);
 
   useEffect(() => {

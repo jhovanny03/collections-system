@@ -9,7 +9,7 @@ const REVIEW_COLLECTION = "mycasePaymentReview";
 // MyCase payments already dealt with outside the ledger (e.g. both halves of a bounced
 // e-check cancelled by the rebuild). The hourly sync skips them.
 const HANDLED = "mycaseHandled";
-const MIRROR = { cases: "mycaseCases", invoices: "mycaseInvoices", payments: "mycasePayments" };
+const MIRROR = { cases: "mycaseCases", invoices: "mycaseInvoices", payments: "mycasePayments", clients: "mycaseClients" };
 // The payments cursor predates the mirror; keep its document so a deployed importer resumes.
 const cursorDoc = (kind = "payments") =>
   kind === "payments" ? "integrations/mycasePayments" : `integrations/mycase_${kind}`;
@@ -101,6 +101,8 @@ function createFirestoreStore(db) {
             const upd = {};
             const type = caseTypeFromMyCase(s.data().practiceArea);
             if (type && type !== only.caseType) upd.caseType = type;
+            // Paid the whole fee already (often on the initial invoice): no plan needed.
+            if (only.awaitingPlan && flags.paidInFull) Object.assign(upd, { awaitingPlan: false, noPlanNeeded: true, noPlanReason: "Paid in full in MyCase", invoiceUpdatedAt: new Date().toISOString(), invoiceUpdatedBy: "MyCase sync" });
             const fee = Number(s.data().flatFee || 0);
             if (only.awaitingPlan && fee > Number(only.invoiceTotal || 0)) {
               upd.invoiceTotal = Math.max(fee, Number(only.initialPaymentAmount || 0));
@@ -112,6 +114,118 @@ function createFirestoreStore(db) {
         await batch.commit();
       });
       return flagged;
+    },
+
+    /**
+     * Copy MyCase phone numbers onto Collections clients (field mycasePhones; the team's
+     * own fields are never touched): every number of every MyCase person on the client's
+     * case. For the people and cases given, or every tracked case with all=true.
+     * Returns { clients, withPhone }.
+     */
+    async refreshPhones({ mycaseClientIds = [], caseIds = [], all: allCases = false } = {}) {
+      let all = allCases;
+      const byCase = await store.loadClientsByCaseId();
+      // A big batch (first run, full re-read) is cheaper as one pass over every case.
+      if (mycaseClientIds.length > 2000) all = true;
+      const wanted = new Set(all ? [...byCase.keys()] : caseIds.map(String).filter((id) => byCase.has(id)));
+      // Cases that include a person whose numbers changed.
+      await inChunks([...new Set(mycaseClientIds.map(String))], 30, async (ids) => {
+        const snap = await db.collection(MIRROR.cases).where("clientIds", "array-contains-any", ids).select().get();
+        snap.forEach((d) => byCase.has(d.id) && wanted.add(d.id));
+      });
+      const caseList = [...wanted];
+      const caseDocs = new Map();
+      await inChunks(caseList, 300, async (ids) => {
+        (await db.getAll(...ids.map((id) => db.collection(MIRROR.cases).doc(id)))).forEach((s) => s.exists && caseDocs.set(s.id, s.data()));
+      });
+      const people = new Set();
+      caseDocs.forEach((k) => (k.clientIds || []).forEach((id) => people.add(String(id))));
+      const phonesByPerson = new Map();
+      await inChunks([...people], 300, async (ids) => {
+        (await db.getAll(...ids.map((id) => db.collection(MIRROR.clients).doc(id)))).forEach((s) => s.exists && phonesByPerson.set(s.id, s.data().phones || []));
+      });
+      let updated = 0;
+      let withPhone = 0;
+      await inChunks(caseList, BATCH, async (ids) => {
+        const batch = db.batch();
+        let writes = 0;
+        for (const caseId of ids) {
+          const k = caseDocs.get(caseId);
+          if (!k) continue;
+          const phones = [...new Set((k.clientIds || []).flatMap((id) => phonesByPerson.get(String(id)) || []))];
+          for (const c of byCase.get(caseId) || []) {
+            if (phones.length) withPhone++;
+            const before = JSON.stringify(c.mycasePhones || []);
+            if (before === JSON.stringify(phones)) continue;
+            batch.update(db.collection("clients").doc(c.id), { mycasePhones: phones });
+            writes++;
+            updated++;
+          }
+        }
+        if (writes) await batch.commit();
+      });
+      return { clients: updated, withPhone };
+    },
+
+    /**
+     * Hand-entered clients: keep a copy of every payment MyCase received on their case
+     * (all years) in `mycaseReceived`, a field of its own, with what its invoice is for
+     * (intake's "IP" invoice = initial, the $150 consultation = other). The app counts
+     * these instead of the typed payments (src/billing/mycaseOverlay.js); typed payments
+     * are never changed. For the cases given, or every case with all=true.
+     * Returns { clients, withPayments }.
+     */
+    async refreshMyCaseReceived({ caseIds = [], all = false } = {}) {
+      const { isHandEntered, isReceived } = require("./shared/billing/mycaseOverlay");
+      const { defaultInvoiceRole } = require("./mycaseSync");
+      const byCase = await store.loadClientsByCaseId();
+      const handCases = [...byCase.keys()].filter((id) => byCase.get(id).some(isHandEntered));
+      const wanted = all ? handCases : [...new Set(caseIds.map(String))].filter((id) => byCase.has(id) && byCase.get(id).some(isHandEntered));
+      if (!wanted.length) return { clients: 0, withPayments: 0 };
+      const paysByCase = new Map();
+      const keep = (d) => {
+        const p = d.data();
+        if (!p.date || !isReceived(p)) return;
+        const k = String(p.caseId || "");
+        if (!wantedSet.has(k)) return;
+        if (!paysByCase.has(k)) paysByCase.set(k, []);
+        paysByCase.get(k).push({ id: String(p.id || d.id), date: String(p.date).slice(0, 10), amount: Number(p.amount), invoiceId: p.invoiceId ? String(p.invoiceId) : null });
+      };
+      const wantedSet = new Set(wanted);
+      const roleOf = new Map();
+      const keepInv = (d) => {
+        const inv = d.data();
+        if (wantedSet.has(String(inv.caseId))) roleOf.set(String(inv.id), defaultInvoiceRole(inv));
+      };
+      const FIELDS = ["id", "caseId", "date", "amount", "status", "type", "invoiceId"];
+      if (wanted.length > 300) {
+        (await db.collection(MIRROR.payments).select(...FIELDS).get()).forEach(keep);
+        (await db.collection(MIRROR.invoices).select("id", "caseId", "description", "total").get()).forEach(keepInv);
+      } else {
+        await inChunks(wanted, 30, async (ids) => {
+          (await db.collection(MIRROR.payments).where("caseId", "in", ids).select(...FIELDS).get()).forEach(keep);
+          (await db.collection(MIRROR.invoices).where("caseId", "in", ids).select("id", "caseId", "description", "total").get()).forEach(keepInv);
+        });
+      }
+      paysByCase.forEach((list) => list.forEach((p) => (p.role = (p.invoiceId && roleOf.get(p.invoiceId)) || null)));
+      let updated = 0;
+      let withPayments = 0;
+      await inChunks(wanted, BATCH, async (ids) => {
+        const batch = db.batch();
+        let writes = 0;
+        for (const caseId of ids) {
+          const list = (paysByCase.get(caseId) || []).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+          for (const c of byCase.get(caseId).filter(isHandEntered)) {
+            if (list.length) withPayments++;
+            if (JSON.stringify(c.mycaseReceived || []) === JSON.stringify(list)) continue;
+            batch.update(db.collection("clients").doc(c.id), { mycaseReceived: list });
+            writes++;
+            updated++;
+          }
+        }
+        if (writes) await batch.commit();
+      });
+      return { clients: updated, withPayments };
     },
 
     /** Close (or reopen) clients to match their case's status in MyCase. */

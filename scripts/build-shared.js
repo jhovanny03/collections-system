@@ -1,14 +1,14 @@
 // scripts/build-shared.js
-// Copies the app's billing / Level 10 math into functions/shared as CommonJS, so the
-// Monday scorecard job on the server runs exactly the same code as the "Populate Week"
-// button in the app. Run after changing any of these files (and before deploying):
+// Copies the app's billing math into functions/shared as CommonJS, so the server
+// jobs (nightly aging snapshot) run exactly the same code as the app. Run after
+// changing any of these files (and before deploying):
 //   node scripts/build-shared.js
 const fs = require("fs");
 const path = require("path");
 const { transform } = require("sucrase");
 
 const ROOT = path.resolve(__dirname, "..");
-const FILES = ["utils/dates.js", "billing/plans.js", "billing/ledger.js", "Level10/services/metrics.compute.js"];
+const FILES = ["utils/dates.js", "billing/plans.js", "billing/ledger.js", "billing/mycaseOverlay.js"];
 
 for (const rel of FILES) {
   const src = path.join(ROOT, "src", rel);

@@ -3,8 +3,9 @@
 // from the same per-client calculation as the client profile and A/R Aging
 // (computeBillingSnapshot, plan-aware), so numbers agree everywhere.
 import { useMemo } from "react";
-import { clientPosition, monthDueCollected, agingOf, AGING_BUCKETS } from "./ledger";
+import { clientPosition, monthDueCollected, agingOf, clientAging, monthMoneySplit, installmentPaidBetween, AGING_BUCKETS } from "./ledger";
 import { parseDate } from "../utils/dates";
+import { lastContactOf, needsContact } from "./contact";
 export { AGING_BUCKETS };
 
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -78,17 +79,37 @@ function lastInstallment(c) {
 /** Per-client billing row, from the installment ledger (src/billing/ledger.js). */
 export function clientRows(clients, asOf = new Date()) {
   const month = ymOf(asOf);
+  const lastMonthStart = new Date(asOf.getFullYear(), asOf.getMonth() - 1, 1);
+  const lastMonthSameDay = new Date(asOf.getFullYear(), asOf.getMonth() - 1, Math.min(asOf.getDate(), 28), 23, 59, 59);
+  const dayStart = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
+  const weekStart = new Date(dayStart);
+  weekStart.setDate(dayStart.getDate() - ((dayStart.getDay() + 6) % 7)); // Monday
   return clients.map((c) => {
     const status = statusOf(c);
     let pos;
     try {
       pos = clientPosition(c, asOf);
     } catch (e) {
-      pos = { pastDue: 0, thisMonth: 0, owedNow: 0, monthsBehind: 0, balance: 0, planEnded: false };
+      pos = { pastDue: 0, thisMonth: 0, owedNow: 0, monthsBehind: 0, balance: 0, planEnded: false, initialOwed: 0 };
     }
-    let aging = { b0: 0, b30: 0, b60: 0, b90: 0, total: 0 };
+    let aging = { b0: 0, b30: 0, b60: 0, b90: 0, total: 0, oldest: null };
+    let agingByInstallment = { b0: 0, b30: 0, b60: 0, b90: 0, total: 0 };
     try {
-      aging = agingOf(c, asOf);
+      aging = clientAging(c, asOf);
+      agingByInstallment = agingOf(c, asOf);
+    } catch (e) {
+      /* no plan */
+    }
+    // This month's installment money (no initial payments) and where it went.
+    let planMoney = { total: 0, thisMonth: 0, catchUp: 0, ahead: 0 };
+    let planPaidLastMtd = 0;
+    let planPaidToday = 0;
+    let planPaidWeek = 0;
+    try {
+      planMoney = monthMoneySplit(c, asOf);
+      planPaidLastMtd = installmentPaidBetween(c, lastMonthStart, lastMonthSameDay);
+      planPaidToday = installmentPaidBetween(c, dayStart, asOf);
+      planPaidWeek = installmentPaidBetween(c, weekStart, asOf);
     } catch (e) {
       /* no plan */
     }
@@ -107,7 +128,9 @@ export function clientRows(clients, asOf = new Date()) {
       caseType: c.caseType || "—",
       caseStatus: c.caseStatus || "",
       caseTitle: c.caseTitle || "",
-      source: c.source === "mycase" ? "MyCase" : (c.invoiceRoles && Object.keys(c.invoiceRoles).length ? "Rebuilt from MyCase" : "Hand-entered"),
+      // Where the payments come from: MyCase (created there, rebuilt with invoice tags, or
+      // invoices still to tag on Case Setup), or typed by hand (no MyCase case link).
+      source: c.source === "mycase" ? "MyCase" : c.invoiceRoles && Object.keys(c.invoiceRoles).length ? "Rebuilt from MyCase" : c.typedPayments ? "MyCase, invoices to tag" : "Typed by hand",
       inPlan,
       onHold: !!c.paymentHold?.active,
       // Every installment due by today and not paid (this month's included once the 15th passed).
@@ -118,8 +141,16 @@ export function clientRows(clients, asOf = new Date()) {
       pastMonthsDue: status === "closed" ? 0 : pos.pastDue,
       missedMonths: owed > 0 ? Math.max(1, pos.monthsBehind) : 0,
       balance: status === "closed" ? 0 : pos.balance,
-      // Accountant aging: everything not paid, this month included even before the 15th.
+      // Initial payment not made (or refunded): intake's, kept out of owed / aging.
+      initialOwed: status === "closed" ? 0 : pos.initialOwed || 0,
+      // Aging by client: all they owe, in the bucket of their oldest unpaid installment.
       aging,
+      // The same split installment by installment (accountant detail, CSV).
+      agingByInstallment,
+      planMoney,
+      planPaidLastMtd,
+      planPaidToday,
+      planPaidWeek,
       expectedThisMonth: mc.due,
       collectedThisMonth: mc.collected,
       lastPayment: lastInstallment(c),
@@ -127,6 +158,10 @@ export function clientRows(clients, asOf = new Date()) {
       myCaseLink: c.myCaseLink || "",
       createdAt: parseDate(c.createdAt),
       awaitingPlan: !!c.awaitingPlan,
+      phones: c.mycasePhones || [],
+      lastContact: lastContactOf(c),
+      // Owes money and nobody reached them in 30+ days (calls from RingCentral or logged by hand).
+      needsContact: status !== "closed" && needsContact(c, owed, asOf),
       paidInFull: inPlan && pos.balance <= 0 && owed <= 0,
       // Every month of the plan has passed and money is still owed.
       planEnded: owed > 0 && pos.planEnded,
@@ -139,8 +174,17 @@ export function summarize(rows, payments, asOf = new Date()) {
   const open = rows.filter((r) => r.status !== "closed");
   // Clients still paying: on a plan, not paused, with money left (paid-in-full plans excluded).
   const plan = open.filter((r) => r.inPlan && r.status !== "paused" && (r.balance > 0 || r.amountDue > 0));
-  const owing = plan.filter((r) => r.amountDue > 0);
-  const missedThisMonth = plan.filter((r) => r.dueThisMonth > 0);
+  // Owed and past due count everyone who is not closed (paused clients and new clients
+  // without a plan yet included), the same clients as the Aging buckets, so the numbers
+  // agree: after the 15th, Outstanding = Aging total and Past due this month = 0-30.
+  const owing = open.filter((r) => r.amountDue > 0);
+  // Past due this month: clients who were up to date going into the month and have not
+  // paid all of this month's installment (the same clients as the collection rate, so
+  // due - collected = past due). Clients already behind are in Outstanding / Aging.
+  // A client with any older month unpaid (on any plan) is "already behind", not here.
+  const missedThisMonth = open.filter((r) => r.pastMonthsDue <= 0.005 && r.expectedThisMonth - r.collectedThisMonth > 0.005);
+  // This month's installments still unpaid by clients who were already behind (in 0-30 too).
+  const behindThisMonth = open.reduce((s, r) => s + r.dueThisMonth, 0) - missedThisMonth.reduce((s, r) => s + (r.expectedThisMonth - r.collectedThisMonth), 0);
   const ended = plan.filter((r) => r.planEnded);
   const month = ymOf(asOf);
   const lastMonthDate = new Date(asOf.getFullYear(), asOf.getMonth() - 1, 1);
@@ -173,8 +217,11 @@ export function summarize(rows, payments, asOf = new Date()) {
 
   // Everyone not closed: a client whose last installment was this month is no longer
   // "still paying" but still counts toward this month's due and collected.
-  const expected = open.reduce((s, r) => s + r.expectedThisMonth, 0);
-  const collectedOnPlan = open.reduce((s, r) => s + r.collectedThisMonth, 0);
+  // Only clients with no older month owed (client-wide, every plan): the same clients as
+  // Past due this month, so due - collected = Past due.
+  const upToDate = open.filter((r) => r.pastMonthsDue <= 0.005);
+  const expected = upToDate.reduce((s, r) => s + r.expectedThisMonth, 0);
+  const collectedOnPlan = upToDate.reduce((s, r) => s + r.collectedThisMonth, 0);
 
   return {
     asOf,
@@ -182,11 +229,21 @@ export function summarize(rows, payments, asOf = new Date()) {
     // Owed now: every installment due by today and not paid, all plans.
     outstanding: owing.reduce((s, r) => s + r.amountDue, 0),
     outstandingClients: owing.length,
+    outstandingPaused: owing.filter((r) => r.status === "paused").reduce((s, r) => s + r.amountDue, 0),
     // Left to collect on all plans, future installments included.
     leftOnPlans: plan.reduce((s, r) => s + r.balance, 0),
-    // Past due = this month's installment, missed (once the 15th has passed).
-    pastDue: { clients: missedThisMonth.length, amount: missedThisMonth.reduce((s, r) => s + r.dueThisMonth, 0), rate: plan.length ? missedThisMonth.length / plan.length : null },
+    // Past due = this month's installment, missed by clients who were current (after the 15th).
+    pastDue: {
+      clients: missedThisMonth.length,
+      amount: missedThisMonth.reduce((s, r) => s + (r.expectedThisMonth - r.collectedThisMonth), 0),
+      rate: plan.length ? missedThisMonth.length / plan.length : null,
+      // This month's installments of clients already behind: also in Aging 0-30.
+      behindAmount: Math.max(0, behindThisMonth),
+      behindClients: open.filter((r) => r.dueThisMonth > 0 && !missedThisMonth.includes(r)).length,
+    },
     planEnded: { clients: ended.length, amount: ended.reduce((s, r) => s + r.amountDue, 0) },
+    // Not in Outstanding / Aging: intake's (Initial payments page).
+    initialUnpaid: { clients: open.filter((r) => r.initialOwed > 0.005).length, amount: open.reduce((s, r) => s + r.initialOwed, 0) },
     current: { clients: plan.length - owing.length, rate: plan.length ? (plan.length - owing.length) / plan.length : null },
     aging,
     buckets,
@@ -200,6 +257,21 @@ export function summarize(rows, payments, asOf = new Date()) {
       lastMonthSameTime: sum(lastMtd),
       ytd: sum(received.filter((p) => p.ymd.startsWith(year))),
       mtdFromMyCase: sum(mtd.filter((p) => p.fromMyCase)),
+      // Where this month's money went: initial payments, this month's installments
+      // (clients up to date going in), and the rest (catch-up on older months / paid ahead).
+      mtdInitial: sum(mtd.filter((p) => p.initial)),
+      mtdThisMonth: collectedOnPlan,
+      mtdCatchUp: Math.max(0, sum(mtd) - sum(mtd.filter((p) => p.initial)) - collectedOnPlan),
+    },
+    // Payment-plan money only (initial payments are the intake team's), and where it went.
+    plan: {
+      mtd: rows.reduce((t, r) => t + r.planMoney.total, 0),
+      thisMonth: rows.reduce((t, r) => t + r.planMoney.thisMonth, 0),
+      catchUp: rows.reduce((t, r) => t + r.planMoney.catchUp, 0),
+      ahead: rows.reduce((t, r) => t + r.planMoney.ahead, 0),
+      lastMonthSameTime: rows.reduce((t, r) => t + r.planPaidLastMtd, 0),
+      today: rows.reduce((t, r) => t + r.planPaidToday, 0),
+      week: rows.reduce((t, r) => t + r.planPaidWeek, 0),
     },
   };
 }

@@ -30,7 +30,6 @@ import AddIcon from "@mui/icons-material/Add";
 import HistoryIcon from "@mui/icons-material/History";
 import WorkIcon from "@mui/icons-material/Work";
 import { doc, updateDoc } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
 import db from "../firebase";
 import BillingOverview from "./BillingOverview";
 import { planViews } from "../billing/plans";
@@ -115,8 +114,6 @@ export default function CaseSwitcher({ client, setClient }) {
 
     setSaving(true);
     try {
-      const auth = getAuth();
-      const user = auth.currentUser;
       const by = getActor().name;
       const now = new Date().toISOString();
 

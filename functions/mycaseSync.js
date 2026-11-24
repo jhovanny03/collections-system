@@ -27,10 +27,15 @@ const FEEDS = {
   cases: { path: "/feed/cases", key: "cases" },
   invoices: { path: "/feed/invoices", key: "invoices" },
   payments: { path: "/feed/payments", key: "payments" },
+  clients: { path: "/feed/clients", key: "clients" },
 };
 
 /** Feed row -> mirror document (camelCase, numbers as numbers, ids as strings). */
 function toMirrorDoc(kind, r) {
+  if (kind === "clients") {
+    // MyCase people: only what matching calls needs (numbers in one format).
+    return { id: String(r.id), name: r.full_name || "", phones: require("./phones").phonesOf(r) };
+  }
   if (kind === "cases") {
     return {
       id: String(r.id), name: r.name || "", caseNumber: r.case_number || "", status: r.status || "",
@@ -116,6 +121,58 @@ function lastPaymentDate(payments = []) {
   return dates[dates.length - 1] || null;
 }
 
+/**
+ * The case's initial-payment invoice:
+ *  - a client rebuilt from MyCase: the invoice billing tagged "initial" (none otherwise)
+ *  - a hand-entered client: the invoice for exactly their initial payment amount
+ *  - a case not in Collections: its first real invoice (consultation fee aside), unless
+ *    its description says it is an installment invoice
+ */
+function initialInvoiceOf(invoices, client = null) {
+  const live = invoices.filter((i) => i.status !== "draft" && cents(i.total) > 0 && !isConsultFee(i));
+  if (!live.length) return null;
+  const roles = (client && client.invoiceRoles) || {};
+  if (Object.keys(roles).length) {
+    // The initial payment can be split over several invoices: add them up.
+    const tagged = live.filter((i) => roles[String(i.id)] === "initial");
+    if (!tagged.length) return null;
+    if (tagged.length === 1) return tagged[0];
+    const open = tagged.find((i) => cents(i.total) > cents(i.paid)) || tagged[0];
+    return {
+      id: open.id,
+      invoiceDate: tagged.map((i) => i.invoiceDate || "").sort()[0] || null,
+      total: tagged.reduce((t, i) => t + Number(i.total || 0), 0),
+      paid: tagged.reduce((t, i) => t + Number(i.paid || 0), 0),
+    };
+  }
+  if (client) {
+    const amount = cents(client.initialPaymentAmount);
+    return amount > 0 ? live.find((i) => Math.abs(cents(i.total) - amount) <= 100) || null : null;
+  }
+  const first = live.slice().sort((a, b) => String(a.invoiceDate || "").localeCompare(String(b.invoiceDate || "")) || String(a.id).localeCompare(String(b.id)))[0];
+  return defaultInvoiceRole(first) === "installment" ? null : first;
+}
+
+/**
+ * Initial payment not completed, for the "Initial payments" page.
+ * initialState: "client" (in Collections, owes part of the initial), "started" (not in
+ * Collections, paid part of it), "notStarted" (not in Collections, paid nothing),
+ * "potential" (a potential client's quote), or null (nothing owed / closed).
+ */
+function initialFlags(caseDoc, invoices, onlyClient, tracked) {
+  const none = { initialState: null, initialDue: 0, initialTotal: 0, initialPaid: 0, initialInvoiceId: null, initialDate: null };
+  // A case only "marked" closed (stage or name) still counts while its client is in
+  // Collections; untracked ones that look closed are left out.
+  if (caseDoc.status === "closed" || tracked === "multiple" || (!tracked && looksClosed(caseDoc))) return none;
+  const inv = initialInvoiceOf(invoices, onlyClient);
+  if (!inv) return none;
+  const due = Math.max(0, cents(inv.total) - cents(inv.paid)) / 100;
+  if (due <= 0.5) return none;
+  const paid = cents(inv.paid) / 100;
+  const state = tracked ? "client" : isPotentialCase(caseDoc) ? "potential" : paid > 0 ? "started" : "notStarted";
+  return { initialState: state, initialDue: due, initialTotal: cents(inv.total) / 100, initialPaid: paid, initialInvoiceId: String(inv.id), initialDate: inv.invoiceDate || null };
+}
+
 function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
   const openBalanceCents = invoices
     .filter((i) => i.status !== "draft")
@@ -125,16 +182,25 @@ function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
   const open = caseDoc.status !== "closed";
   const autoCreate = !tracked && shouldAutoCreate(caseDoc, invoices);
   const only = trackedClients.length === 1 && typeof trackedClients[0] === "object" ? trackedClients[0] : null;
+  // Paid in full already (e.g. the whole flat fee on the initial invoice): no plan needed.
+  const paidCents = invoices.filter((i) => i.status !== "draft").reduce((t, i) => t + cents(i.paid), 0);
+  const paidInFull = caseDoc.flatFee > 0 ? paidCents >= cents(caseDoc.flatFee) && openBalanceCents === 0 : false;
+  // The initial-payment invoice's date: billing's welcome call is due 7 days after it.
+  const ipInvoice = only || !trackedClients.length ? initialInvoiceOf(invoices, only) : null;
   return {
     openBalance: openBalanceCents / 100,
     invoiceCount: invoices.filter((i) => i.status !== "draft").length,
     trackedClientId: tracked,
     needsSetup: open && openBalanceCents > 0 && !tracked && !autoCreate,
     autoCreate,
-    needsPlan: open && !!(only && only.awaitingPlan),
+    needsPlan: open && !!(only && only.awaitingPlan) && !paidInFull,
+    paidInFull,
+    ipInvoiceDate: ipInvoice ? ipInvoice.invoiceDate || null : null,
     setupGroup: setupGroup(caseDoc),
     flatFee: caseDoc.flatFee || null,
     uninvoicedFee: uninvoicedFee(caseDoc, invoices),
+    // Clients loaded as objects (the sync) give the initial-payment check; ids only do not.
+    ...(only || !trackedClients.length ? initialFlags(caseDoc, invoices, only, tracked) : {}),
     // Only when the caller looked the payments up; otherwise the stored value stays.
     ...(payments ? { lastPaymentDate: lastPaymentDate(payments) } : {}),
   };
@@ -363,6 +429,7 @@ async function syncMirror({ store, kind, baseUrl, token, fetchImpl, pageLimit = 
   const { path, key } = FEEDS[kind];
   let cursor = await store.getCursor(kind);
   const touched = new Set();
+  const ids = new Set();
   let rows = 0;
   for (let page = 0; page < maxPages; page++) {
     const feed = await fetchFeedPage({ baseUrl, token, cursor, limit: pageLimit, fetchImpl, path });
@@ -370,8 +437,9 @@ async function syncMirror({ store, kind, baseUrl, token, fetchImpl, pageLimit = 
     await store.upsertMirror(kind, list);
     rows += list.length;
     for (const r of list) {
+      ids.add(String(r.id));
       const caseId = kind === "cases" ? r.id : r.case_id;
-      if (caseId) touched.add(String(caseId));
+      if (caseId && kind !== "clients") touched.add(String(caseId));
     }
     if (feed.next_cursor) {
       cursor = feed.next_cursor;
@@ -379,7 +447,7 @@ async function syncMirror({ store, kind, baseUrl, token, fetchImpl, pageLimit = 
     }
     if (!feed.has_more) break;
   }
-  return { rows, touched };
+  return { rows, touched, ids };
 }
 
 /**
@@ -395,10 +463,27 @@ async function runAll({ store, baseUrl, token, fetchImpl, log = console }) {
   // New intake cases become clients before payments are applied, so their payments count.
   const autoCreated = store.autoCreatePending ? await store.autoCreatePending() : 0;
   const payments = await runImport({ store, baseUrl, token, fetchImpl, log: {} });
+  // Client phone numbers (for matching RingCentral calls): people that changed in MyCase,
+  // and cases whose client list changed. Skipped when the feed is not deployed yet.
+  let phones = null;
+  if (store.refreshPhones) {
+    try {
+      const people = await syncMirror({ store, kind: "clients", baseUrl, token, fetchImpl });
+      phones = await store.refreshPhones({ mycaseClientIds: [...people.ids], caseIds: [...cases.touched] });
+    } catch (e) {
+      if (log.warn) log.warn("Client phones not synced:", e.message);
+    }
+  }
+  // Hand-entered clients: MyCase payments on their case (the app counts the ones nobody
+  // typed in). Only cases that had a payment row in this run.
+  let received = null;
+  if (store.refreshMyCaseReceived && payments.touchedCases && payments.touchedCases.size) {
+    received = await store.refreshMyCaseReceived({ caseIds: [...payments.touchedCases] });
+  }
   // A case closed (or reopened) in MyCase closes (or reopens) its client here.
   const closures = store.syncCaseClosures ? await store.syncCaseClosures([...touched]) : null;
   const linkIssues = store.refreshLinkIssues ? await store.refreshLinkIssues() : null;
-  const stats = { cases: cases.rows, invoices: invoices.rows, casesRefreshed: touched.size, needsSetup: flagged, autoCreated, payments, closures: closures && { closed: closures.closed, reopened: closures.reopened }, linkIssues };
+  const stats = { cases: cases.rows, invoices: invoices.rows, casesRefreshed: touched.size, needsSetup: flagged, autoCreated, payments, mycaseReceived: received, closures: closures && { closed: closures.closed, reopened: closures.reopened, filed: closures.filed }, phones, linkIssues };
   if (log.info) log.info("MyCase sync", stats);
   return stats;
 }
@@ -416,6 +501,8 @@ module.exports = {
   caseTypeFromMyCase,
   uninvoicedFee,
   intakeInvoice,
+  initialInvoiceOf,
+  initialFlags,
   shouldAutoCreate,
   buildIntakeClient,
   toMirrorDoc,

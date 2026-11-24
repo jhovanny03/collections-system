@@ -9,8 +9,6 @@ if (!admin.apps.length) {
 /**
  * Database every function reads and writes. Unset (default) = the original database.
  * Set FIRESTORE_DATABASE=mycase-rebuild in functions/.env to run against the rebuilt one.
- * Note: the v1 Firestore trigger onWeeklySnapshotRequested still listens on the original
- * database; it must be moved to a v2 trigger with { database } when switching over.
  */
 const { getFirestore } = require("firebase-admin/firestore");
 const { planViews } = require("./plans");
@@ -66,139 +64,15 @@ function labelFor(d) {
   return `${d.toLocaleString("default", { month: "long" })} ${d.getFullYear()}`;
 }
 
-/** Utility: current Monday in a given TZ (defaults to ET) */
-function currentMondayInTZ(tz = "America/New_York") {
-  const nowTZ = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-  const day = nowTZ.getDay(); // 0 Sun..6 Sat
-  const diff = (day === 0 ? -6 : 1) - day; // move to Monday
-  const m = new Date(nowTZ);
-  m.setDate(m.getDate() + diff);
-  m.setHours(0, 0, 0, 0);
-  return m;
-}
-
 /* ------------------------------------------------------------------
- * Level10 Weekly Snapshots (Scheduler + Admin "Run now" trigger)
+ * Scheduled jobs use the v2 scheduler; callables stay on v1.
  * ------------------------------------------------------------------ */
-
-// v2 scheduler (works alongside your existing v1 https functions)
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 setGlobalOptions({ region: "us-central1", timeoutSeconds: 540, memory: "512MiB" });
 
-/* The real Level 10 math, generated from the app's own source (scripts/build-shared.js),
- * so the Monday job and the "Populate Week" button always agree. */
-const { computeAll, computeOpening30AR } = require("./shared/Level10/services/metrics.compute");
-
-/* ---------------------------------------
- * Core upsert used by both triggers below
- * --------------------------------------- */
-async function computeAndUpsertWeek({
-  mondayKey,
-  monthKey,
-  tz = "America/New_York",
-  dueDay = 15,
-}) {
-  const db = appDb();
-  const clients = (await db.collection("clients").get()).docs.map((d) => ({ id: d.id, ...d.data() }));
-
-  // 1) Month doc: opening 30+ A/R (once per month) and this week's column.
-  const monthRef = db.doc(`level10/${monthKey}`);
-  const monthSnap = await monthRef.get();
-  const monthData = monthSnap.exists ? monthSnap.data() || {} : {};
-  let opening30 = monthData.opening30AR != null ? monthData.opening30AR : null;
-  if (opening30 == null) {
-    opening30 = computeOpening30AR({ clients, month: monthKey, tz, dueDay });
-  }
-  const columns = Array.isArray(monthData.columns) ? monthData.columns.slice() : [];
-  if (!columns.includes(mondayKey)) columns.push(mondayKey);
-  columns.sort();
-  await monthRef.set({ opening30AR: opening30, columns, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-
-  // 2) This week's automatic metrics (same code as the app's Populate Week).
-  const [y, m, d] = mondayKey.split("-").map(Number);
-  const monday = new Date(y, m - 1, d);
-  const sunday = new Date(y, m - 1, d + 6);
-  const computed = computeAll({ clients, monday, sunday, month: monthKey, tz, dueDay, opening30AR: opening30 });
-
-  // 3) Week doc: automatic metrics replaced, the team's manual cells kept.
-  const weekRef = db.doc(`level10/${monthKey}/weeks/${mondayKey}`);
-  const weekSnap = await weekRef.get();
-  const existing = weekSnap.exists ? weekSnap.data() || {} : {};
-  await weekRef.set(
-    {
-      metrics: computed.metrics || {},
-      manual: existing.manual || {},
-      createdAt: existing.createdAt || admin.firestore.FieldValue.serverTimestamp(),
-      createdBy: existing.createdBy || "Monday automatic",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-  return computed.metrics || {};
-}
-
-/* ---------------------------------------------------
- * A) Cron — Every Monday 09:00 America/New_York
- * --------------------------------------------------- */
-// Level 10 Meeting was removed from the app (Nov 2026); this job is no longer deployed.
-const weeklySnapshotCron = onSchedule(
-  { schedule: "0 9 * * 1", timeZone: "America/New_York" },
-  async () => {
-    const monday = currentMondayInTZ("America/New_York");
-    const mondayKey = ymdOf(monday);
-    const monthKey = ymOf(monday);
-    await computeAndUpsertWeek({
-      mondayKey,
-      monthKey,
-      tz: "America/New_York",
-      dueDay: 15,
-    });
-  }
-);
-
 /* -------------------------------------------------------------------
- * B) Admin “Run now” — Firestore trigger on adminTasks/weeklySnapshot
- * ------------------------------------------------------------------- */
-// Level 10 Meeting was removed from the app (Nov 2026); this job is no longer deployed.
-const onWeeklySnapshotRequested = functions.firestore
-  .document("adminTasks/weeklySnapshot")
-  .onWrite(async (change) => {
-    const after = change.after.exists ? change.after.data() : null;
-    if (!after) return;
-
-    const tz = (after.params && after.params.tz) || "America/New_York";
-    const dueDay = (after.params && after.params.dueDay) || 15;
-
-    // If a specific month was passed, use its current Monday series starter;
-    // otherwise default to "this" Monday in TZ.
-    let monday = currentMondayInTZ(tz);
-    if (after.params && after.params.month) {
-      // Use the first Monday <= today within that month when running manually.
-      const [Y, M] = String(after.params.month).split("-").map(Number);
-      const first = new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-      first.setFullYear(Y, M - 1, 1);
-      first.setHours(0, 0, 0, 0);
-      // advance to Monday
-      const dow = first.getDay();
-      const diff = (dow === 0 ? 1 : 8 - dow) % 7;
-      first.setDate(first.getDate() + (dow === 1 ? 0 : diff));
-      monday = first;
-    }
-
-    const mondayKey = ymdOf(monday);
-    const monthKey = ymOf(monday);
-
-    await computeAndUpsertWeek({ mondayKey, monthKey, tz, dueDay });
-
-    await change.after.ref.set(
-      { lastProcessedAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
-  });
-
-/* -------------------------------------------------------------------
- * C) Follow-Ups Cohort Generator (real logic)
+ * Follow-Ups list (built on the 16th, refreshed every 2 hours)
  * ------------------------------------------------------------------- */
 
 /** Installment amount for a given month date using client's schedule */
@@ -755,13 +629,15 @@ function promiseOutcome(promise, payments, today) {
  * { b0, b30, b60, b90, total, clients }
  */
 function agingTotals(clients, at) {
-  const { agingOf } = require("./shared/billing/ledger");
+  // Same as the app: by client, and hand-entered clients get their MyCase payments.
+  const { clientAging } = require("./shared/billing/ledger");
+  const { withMyCasePayments } = require("./shared/billing/mycaseOverlay");
   const t = { b0: 0, b30: 0, b60: 0, b90: 0, total: 0, clients: 0 };
   for (const c of clients) {
     if (String(c.status || "active").toLowerCase() === "closed") continue;
     let a;
     try {
-      a = agingOf(c, at);
+      a = clientAging(withMyCasePayments(c), at);
     } catch (e) {
       continue;
     }
@@ -841,6 +717,25 @@ const { linkClientToCase, keepRecordForCase } = require("./linkIssues");
 
 const MYCASE_FEED_TOKEN = defineSecret("MYCASE_FEED_TOKEN");
 const MYCASE_FEED_URL = defineString("MYCASE_FEED_URL");
+
+/* RingCentral: billing calls -> proof of contact on each client (functions/ringcentral.js).
+ * Every 15 minutes, 8 AM-8 PM New York, Mon-Sat. Secrets set with
+ * `firebase functions:secrets:set RC_CLIENT_ID` (and RC_CLIENT_SECRET, RC_JWT). */
+const RC_CLIENT_ID = defineSecret("RC_CLIENT_ID");
+const RC_CLIENT_SECRET = defineSecret("RC_CLIENT_SECRET");
+const RC_JWT = defineSecret("RC_JWT");
+exports.importRingCentralCalls = onSchedule(
+  { schedule: "*/15 8-20 * * 1-6", timeZone: "America/New_York", secrets: [RC_CLIENT_ID, RC_CLIENT_SECRET, RC_JWT] },
+  async () => {
+    const { getToken, importCalls } = require("./ringcentral");
+    const token = await getToken({ clientId: RC_CLIENT_ID.value(), clientSecret: RC_CLIENT_SECRET.value(), jwt: RC_JWT.value() });
+    // First run: the last 90 days (RingCentral keeps about that much call log).
+    const since = new Date(Date.now() - 90 * 864e5).toISOString();
+    const r = await importCalls(appDb(), { token, since, admin });
+    console.log("RingCentral calls", r);
+  }
+);
+
 
 exports.importMyCasePayments = onSchedule(
   {
@@ -1044,5 +939,5 @@ exports.retagMyCaseClient = functions.https.onCall(async (data, context) => {
 
 // Unit tests only (FUNCTIONS_UNIT_TEST=1): never set in Cloud Functions, so not deployed.
 if (process.env.FUNCTIONS_UNIT_TEST === "1") {
-  module.exports._test = { agingTotals, computeAndUpsertWeek, computeFollowUpItemForClient, resolutionFor, generateCohort, overwriteCohortItems, applyMyCasePayments, promiseOutcome };
+  module.exports._test = { agingTotals, computeFollowUpItemForClient, resolutionFor, generateCohort, overwriteCohortItems, applyMyCasePayments, promiseOutcome };
 }

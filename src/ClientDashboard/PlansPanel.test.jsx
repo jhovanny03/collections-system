@@ -1,3 +1,4 @@
+/* eslint-disable testing-library/no-node-access -- these checks read the card's layout (label next to value) */
 // Run: CI=true npx react-scripts test --watchAll=false src/ClientDashboard/PlansPanel
 import React from "react";
 import { render, screen, within } from "@testing-library/react";

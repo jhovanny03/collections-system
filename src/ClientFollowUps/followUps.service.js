@@ -3,6 +3,7 @@ import {
   doc,
   serverTimestamp,
   updateDoc,
+  setDoc,
   arrayUnion,
 } from "firebase/firestore";
 import db from "../firebase";
@@ -20,7 +21,8 @@ export const getCohortIdFromAnchor = (anchorDate) => {
 // Update a single cohort item
 export async function updateCohortItem(cohortId, clientId, updates) {
   const itemRef = doc(db, "followUpsCohorts", cohortId, "items", clientId);
-  await updateDoc(itemRef, { ...updates, updatedAt: serverTimestamp() });
+  // merge: also creates the item for a client who joined this month's live list later.
+  await setDoc(itemRef, { clientId, ...updates, updatedAt: serverTimestamp() }, { merge: true });
 }
 
 // Append a communication log entry to the client document

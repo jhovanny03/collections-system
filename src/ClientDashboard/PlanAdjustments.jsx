@@ -13,7 +13,6 @@ import {
 } from "@mui/material";
 import TuneIcon from "@mui/icons-material/Tune";
 import { doc, updateDoc } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
 import db from "../firebase";
 import {
   sortedPlans, managedPlanIds, planSchedule, describeSchedule, withAdjustment, withoutAdjustment, planUpdates,
@@ -38,7 +37,6 @@ function AddAdjustmentDialog({ plan, onClose, onSave }) {
   const save = async () => {
     setError("");
     try {
-      const user = getAuth().currentUser;
       const updated = withAdjustment(plan, { ...form, months: form.months === "" ? null : form.months, by: getActor().name });
       setSaving(true);
       await onSave(updated);

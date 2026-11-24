@@ -38,7 +38,7 @@ export default function ActionHandler() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
-  const [email, setEmail] = useState("");
+  const [, setEmail] = useState(""); // kept for the verify flow; not shown
   const [resetLink, setResetLink] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");

@@ -1,5 +1,5 @@
 // src/pages/Profile.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Box,
   Card,
@@ -19,8 +19,7 @@ import LockRounded from "@mui/icons-material/LockRounded";
 import SaveRounded from "@mui/icons-material/SaveRounded";
 
 import { useAuth } from "../auth/useAuth";
-import db from "../firebase";
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { serverTimestamp } from "firebase/firestore";
 import {
   getAuth,
   updateProfile as fbUpdateProfile,

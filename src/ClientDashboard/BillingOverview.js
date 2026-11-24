@@ -49,11 +49,6 @@ export default function BillingOverview({ client }) {
     const dp = Number(a?.downPayment || 0);
     return applyTo === "balance" ? sum + (amt - dp) : sum;
   }, 0);
-  const upfrontOnlyTotal = adjustments.reduce((sum, a) => {
-    const applyTo = (a?.applyTo || "balance").toLowerCase();
-    const amt = Number(a?.amount || 0);
-    return applyTo === "upfront_only" ? sum + amt : sum;
-  }, 0);
   const invoiceEffective = Math.max(0, invoiceBase + adjToBalanceTotal);
 
   const initialPayment = parseFloat(client?.initialPaymentAmount || 0);
@@ -280,7 +275,9 @@ export default function BillingOverview({ client }) {
       }
     }
     return segs;
-  }, [futureMonths]);
+    // futureMonths is rebuilt every render from the client; recompute when that changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, futureMonths.length]);
 
   if (error) return <Typography color="error">{error}</Typography>;
 

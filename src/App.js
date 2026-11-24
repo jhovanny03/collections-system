@@ -20,7 +20,8 @@ import Layout from "./Layout/Layout";
 import ClientList from "./ClientList";
 import CreateClient from "./CreateClient";
 import ClientDashboard from "./ClientDashboard/ClientDashboard";
-import PromisedPaymentCalendar from "./PromisedPaymentCalendar";
+import PromisedPayments from "./pages/PromisedPayments";
+import InitialPayments from "./pages/InitialPayments";
 import FollowUps from "./ClientFollowUps/FollowUps.jsx";
 import Home from "./Dashboard/Home";
 import UserManagement from "./admin/UserManagement.jsx";
@@ -202,7 +203,15 @@ function ThemeAndRoutes() {
                           path="/promised-payments"
                           element={
                             <EditorRoute>
-                              <PromisedPaymentCalendar />
+                              <PromisedPayments />
+                            </EditorRoute>
+                          }
+                        />
+                        <Route
+                          path="/initial-payments"
+                          element={
+                            <EditorRoute>
+                              <InitialPayments />
                             </EditorRoute>
                           }
                         />

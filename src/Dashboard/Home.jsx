@@ -14,6 +14,7 @@ import LinkOffRounded from "@mui/icons-material/LinkOffRounded";
 import EditNoteRounded from "@mui/icons-material/EditNoteRounded";
 import HourglassTopRounded from "@mui/icons-material/HourglassTopRounded";
 import SyncRounded from "@mui/icons-material/SyncRounded";
+import AccountBalanceWalletRounded from "@mui/icons-material/AccountBalanceWalletRounded";
 import db from "../firebase";
 import { useAuth } from "../auth/useAuth";
 import { useClients } from "../data/ClientsProvider";
@@ -55,7 +56,7 @@ export default function Home() {
   const theme = useTheme();
   const colors = chartColors(theme.palette.mode);
   const { user, isEditorOrHigher } = useAuth();
-  const { clients, loading } = useClients();
+  const { clients, loading, mycaseMonth } = useClients();
   const { counts } = useWorkQueue();
   const { rows, payments, summary: s } = usePortfolio(clients);
   const lastSync = useLastSync();
@@ -71,9 +72,9 @@ export default function Home() {
 
   const firstName = (user?.firstName || user?.name || "").split(" ")[0];
   const mtdTrend =
-    s.collected.lastMonthSameTime > 0
+    s.plan.lastMonthSameTime > 0
       ? (() => {
-          const d = s.collected.mtd / s.collected.lastMonthSameTime - 1;
+          const d = s.plan.mtd / s.plan.lastMonthSameTime - 1;
           return { up: d >= 0, good: d >= 0, label: `${d >= 0 ? "+" : ""}${Math.round(d * 100)}% vs last month` };
         })()
       : null;
@@ -82,6 +83,7 @@ export default function Home() {
     { n: counts.promisesToday, label: "Promises due today", to: "/promised-payments", icon: <EventAvailableRounded />, tone: "warn" },
     { n: counts.followUpsOpen, label: "Follow-ups this month", to: "/follow-ups", icon: <PhoneInTalkRounded />, tone: "bad" },
     { n: counts.followUpsUnlogged, label: "Paid in MyCase, not logged", to: "/follow-ups", icon: <EditNoteRounded />, tone: "default" },
+    { n: counts.initialOpen, label: "Initial payments not completed", to: "/initial-payments", icon: <AccountBalanceWalletRounded />, tone: "warn" },
     { n: counts.waitingPlan, label: "Waiting for a plan", to: "/case-setup", icon: <HourglassTopRounded />, tone: "warn" },
     { n: counts.newCases, label: "New MyCase cases", to: "/case-setup", icon: <PlaylistAddCheckRounded />, tone: "default" },
     { n: counts.reviewOpen, label: "MyCase payments to review", to: "/mycase-review", icon: <RuleRounded />, tone: "default" },
@@ -125,7 +127,17 @@ export default function Home() {
         The numbers
       </Typography>
       <Tiles min={210} sx={{ mt: 0.5, mb: 3 }}>
-        <StatCard label="Collected this month" value={money(s.collected.mtd)} trend={mtdTrend} sub={!mtdTrend ? `${s.collected.mtdCount} payments` : undefined} loading={loading} to="/reports?tab=payments" help="All money received this month (initial payments and installments), from Collections and MyCase." />
+        <StatCard
+          label="Collected this month"
+          value={money(s.plan.mtd)}
+          trend={mtdTrend}
+          sub={`${money(s.plan.thisMonth)} toward ${monthName} · ${money(s.plan.catchUp)} older months · ${money(s.plan.ahead)} paid ahead`}
+          loading={loading}
+          to="/reports?tab=payments"
+          help={`Payment-plan money received this month (initial payments are left out: intake tracks those). Where it went: ${monthName}'s installments; older months clients still owed (they were behind; payments pay the oldest month first); and future months paid ahead. Compared with the same day last month.${
+            mycaseMonth ? ` MyCase received ${money(mycaseMonth.received)} in all; ${money(mycaseMonth.notInApp)} of it (${mycaseMonth.notInAppCount} payments) is on cases not set up in Collections yet (Case Setup).` : ""
+          }`}
+        />
         <StatCard
           label="Collection rate"
           value={pct(s.month.collectionRate)}
@@ -133,24 +145,24 @@ export default function Home() {
           tone={s.month.collectionRate == null ? "default" : s.month.collectionRate >= 0.85 ? "good" : s.month.collectionRate >= 0.7 ? "warn" : "bad"}
           loading={loading}
           to="/reports"
-          help="This month's installments from clients who were up to date going into the month (a client who catches up during the month moves in), and how much of them has been paid."
+          help="This month's installments from clients who were up to date going into the month (a client who catches up during the month moves in), and how much of them has been paid, including money paid ahead in an earlier month. Reports → Payment allocation lists them client by client."
         />
         <StatCard
           label="Past due this month"
           value={pastThe15th ? money(s.pastDue.amount) : "Due the 15th"}
-          sub={pastThe15th ? `${s.pastDue.clients.toLocaleString()} clients missed ${monthName}'s installment` : `${monthName}'s installments are not due yet`}
+          sub={pastThe15th ? `${s.pastDue.clients.toLocaleString()} clients who were current missed ${monthName}'s installment` : `${monthName}'s installments are not due yet`}
           tone="bad"
           loading={loading}
           to="/follow-ups"
-          help="The unpaid part of this month's installment (due on the 15th). Earlier months owed are in Outstanding."
+          help={`Clients who were up to date going into ${monthName} (no older month owed) and have not paid all of its installment, due on the 15th. The same clients as Aging 0–30 and the Follow-ups list. Clients already behind are in Outstanding and the older aging buckets.`}
         />
         <StatCard
           label="Outstanding"
           value={money(s.outstanding)}
-          sub={`${s.outstandingClients.toLocaleString()} clients · every installment due by today`}
+          sub={`${s.outstandingClients.toLocaleString()} clients${s.outstandingPaused > 0 ? ` · incl. ${money(s.outstandingPaused)} from paused clients` : ""}`}
           loading={loading}
           to="/reports?tab=aging"
-          help="Everything the payment plans say should have been paid by today and has not been, all plans. Future installments are not counted."
+          help={`Everything the payment plans say should have been paid by today and has not been: every client who is not closed (paused included). Equals the Aging total. Initial payments not made are left out (${money(s.initialUnpaid.amount)}, ${s.initialUnpaid.clients} clients: see Initial payments).`}
         />
         <StatCard
           label="Plan ended, still owes"
@@ -162,7 +174,7 @@ export default function Home() {
           help="Every month of their plan has passed and they still owe the rest of the balance."
         />
         <StatCard label="Current clients" value={pct(s.current.rate)} sub={`${s.current.clients.toLocaleString()} up to date`} tone="good" loading={loading} to="/clients" help="Clients on a plan who owe nothing as of today." />
-        <StatCard label="Collected today" value={money(s.collected.today)} sub={`${money(s.collected.week)} this week`} loading={loading} to="/reports?tab=payments" />
+        <StatCard label="Collected today" value={money(s.plan.today)} sub={`${money(s.plan.week)} this week`} loading={loading} to="/reports?tab=payments" help="Payment-plan money received today and since Monday. Initial payments are left out (intake tracks those)." />
       </Tiles>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "3fr 2fr" }, mb: 3 }}>

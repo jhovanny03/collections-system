@@ -31,6 +31,7 @@ const PAGES = [
   ["/client/:id", "Client"],
   ["/follow-ups", "Follow-ups"],
   ["/promised-payments", "Promised payments"],
+  ["/initial-payments", "Initial payments"],
   ["/case-setup", "Case Setup"],
   ["/mycase-review", "MyCase Review"],
   ["/reports", "Reports"],
@@ -50,6 +51,7 @@ function attentionItems(counts) {
   add(counts.promisesToday, "Promised payments due today", "Check they came in; call if not", "/promised-payments", "warning");
   add(counts.followUpsOpen, "Clients to follow up this month", "Were current and missed this month", "/follow-ups", "warning");
   add(counts.followUpsUnlogged, "Paid in MyCase, not logged", "Type these payments into Collections", "/follow-ups");
+  add(counts.initialOpen, "Initial payments not completed", "Clients and new cases with the initial payment short", "/initial-payments", "warning");
   add(counts.newCases, "New MyCase cases to set up", "Case Setup › New MyCase cases", "/case-setup");
   add(counts.waitingPlan, "Clients waiting for a plan", "Welcome call and monthly invoice", "/case-setup");
   add(counts.reviewOpen, "MyCase payments to review", "The sync could not place them", "/mycase-review");

@@ -403,12 +403,16 @@ async function fetchFeedPage({ baseUrl, token, cursor, limit = 500, fetchImpl = 
  */
 async function runImport({ store, baseUrl, token, fetchImpl, pageLimit = 500, maxPages = 50, log = console }) {
   const stats = { pages: 0, imported: 0, alreadyImported: 0, ignored: 0, review: 0, reversed: 0 };
+  // Cases with a payment row in this run (not logged; runAll refreshes them).
+  const touchedCases = new Set();
+  Object.defineProperty(stats, "touchedCases", { value: touchedCases, enumerable: false });
   const clientsByCaseId = await store.loadClientsByCaseId();
   let cursor = await store.getCursor("payments");
 
   for (let page = 0; page < maxPages; page++) {
     const feed = await fetchFeedPage({ baseUrl, token, cursor, limit: pageLimit, fetchImpl });
     stats.pages++;
+    feed.payments.forEach((p) => p.case_id && touchedCases.add(String(p.case_id)));
     // Keep every payment, tracked or not: Case Setup imports a case's history from here.
     if (store.upsertMirror) await store.upsertMirror("payments", feed.payments);
     // Payments the rebuild already settled (e.g. cancelled reversal pairs) stay settled.

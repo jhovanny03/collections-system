@@ -22,3 +22,18 @@ test("reopened in MyCase: reopen only what the sync closed, back to its old stat
   assert.equal(r.update.status, "paused");
   assert.equal(closureUpdate({ status: "closed", closedBy: "Arleen" }, { status: "open" }, NOW), null); // closed by hand stays closed
 });
+
+test("filedUpdate: case renamed A -> F in MyCase moves ACTIVE to FILED, never back, never over a hand-set status", () => {
+  const { filedUpdate, isFiledName } = require("./caseClosures");
+  const now = "2026-11-23T12:00:00.000Z";
+  assert.equal(isFiledName("F (10-24) ALJIZAWE, ESSAM (SPOUSE I-360+AOS)"), true);
+  assert.equal(isFiledName("F(10-24) X"), true);
+  assert.equal(isFiledName("A (10-26) KURNIAWAN, NYOMAN"), false);
+  assert.equal(isFiledName("FERNANDEZ (T-VISA)"), false);
+  const up = filedUpdate({ status: "active", caseStatus: "ACTIVE" }, { name: "F (01-25) BHAGWANDAS, LEONARD" }, now);
+  assert.equal(up.update.caseStatus, "FILED");
+  assert.equal(filedUpdate({ status: "active", caseStatus: "" }, { name: "F (01-25) X" }, now).update.caseStatus, "FILED");
+  assert.equal(filedUpdate({ status: "active", caseStatus: "APPROVED" }, { name: "F (01-25) X" }, now), null);
+  assert.equal(filedUpdate({ status: "active", caseStatus: "FILED" }, { name: "A (01-25) X" }, now), null);
+  assert.equal(filedUpdate({ status: "closed", caseStatus: "ACTIVE" }, { name: "F (01-25) X" }, now), null);
+});

@@ -21,6 +21,11 @@ import FollowUpsCalendarView from "./FollowUpsCalendarView";
 import FollowUpsInsightsView from "./FollowUpsInsightsView";
 import { savePaymentPromise } from "../ClientDashboard/PaymentPromise";
 import { PageHeader, StatCard, Tiles, Empty } from "../ui/kit";
+import { useClients } from "../data/ClientsProvider";
+import { usePortfolio } from "../billing/portfolio";
+import { liveItems } from "./liveFollowUps";
+import { lastContactOf, callLink, displayPhone, ago } from "../billing/contact";
+import PhoneRounded from "@mui/icons-material/PhoneRounded";
 
 const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const shortDate = (v) => {
@@ -37,12 +42,17 @@ const thisMonth = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 const isPaid = (row) => !!row.resolvedReason;
+// Saved items: update one, or add it (a client who joined this month's live list later).
+const upsertItem = (prev, row, update) =>
+  (prev || []).some((it) => it.id === row.id)
+    ? prev.map((it) => (it.id === row.id ? { ...it, ...update } : it))
+    : [...(prev || []), { id: row.id, clientId: row.clientId || row.id, clientName: row.clientName, section: row.section, ...update }];
 
 // Plain words for the stored statuses.
 const STATUS = {
   [FOLLOW_UP_STATUS.PENDING]: { label: "Not called", color: "default" },
-  [FOLLOW_UP_STATUS.ATTEMPTED_NO_CONTACT]: { label: "No answer", color: "warning" },
-  [FOLLOW_UP_STATUS.REACHED_WORKING]: { label: "Talking", color: "info" },
+  [FOLLOW_UP_STATUS.ATTEMPTED_NO_CONTACT]: { label: "Called, no answer", color: "warning" },
+  [FOLLOW_UP_STATUS.REACHED_WORKING]: { label: "Contacted", color: "info" },
   [FOLLOW_UP_STATUS.PROMISE]: { label: "Promised", color: "primary" },
   [FOLLOW_UP_STATUS.PARTIAL_PAYMENT]: { label: "Partial", color: "secondary" },
   [FOLLOW_UP_STATUS.RESOLVED]: { label: "Resolved", color: "success" },
@@ -75,12 +85,13 @@ function rowNote(row) {
   const parts = [];
   if (row.planEnded) parts.push("Plan ended, still owes");
   else if (row.section === "behind") parts.push(`${row.monthsBehind} months behind`);
-  if (row.mycaseUnlogged > 0) parts.push(`${money(row.mycaseUnlogged)} paid in MyCase, not typed in`);
   if (reasonLabel(row)) parts.push(reasonLabel(row));
   return parts.length ? { text: parts.join(" · "), color: row.planEnded ? "error.main" : "text.secondary" } : null;
 }
 
 export default function FollowUps() {
+  const { byId, clients } = useClients();
+  const { rows } = usePortfolio(clients);
   const [months, setMonths] = useState([thisMonth()]);
   const [cohortId, setCohortId] = useState(thisMonth());
   const [items, setItems] = useState(null);
@@ -141,7 +152,9 @@ export default function FollowUps() {
 
   useEffect(() => setPage(0), [search, statusFilter, sort, dateFilter, tab, cohortId]);
 
-  const all = useMemo(() => items || [], [items]);
+  // This month (from the 16th): live from the same numbers as Home; saved work kept on top.
+  const live = cohortId === thisMonth() && new Date().getDate() >= 16 && rows.length > 0;
+  const all = useMemo(() => (live ? liveItems(items || [], rows, byId, cohortId) : items || []), [live, items, rows, byId, cohortId]);
   const groups = useMemo(
     () => ({
       current: all.filter((i) => (i.section || "current") === "current" && !isPaid(i)),
@@ -155,7 +168,8 @@ export default function FollowUps() {
     return {
       owe: owe.length,
       oweAmount: owe.reduce((t, i) => t + Number(i.amountDueCurrentMonth || 0), 0),
-      called: owe.filter((i) => (i.attemptCount || 0) > 0).length,
+      // Called = any call after the list (logged here or from RingCentral), or a status set.
+      called: owe.filter((i) => (i.attemptCount || 0) > 0 || (i.rcCalls || 0) > 0 || (i.status && i.status !== FOLLOW_UP_STATUS.PENDING)).length,
       promised: all.filter((i) => i.status === FOLLOW_UP_STATUS.PROMISE && !isPaid(i)).length,
       paid: groups.paid.filter((i) => i.resolvedReason !== "no_longer_due").length,
       paidUnlogged: groups.paid.filter((i) => i.resolvedReason === "paid_mycase").length,
@@ -182,8 +196,8 @@ export default function FollowUps() {
   }, [groups, tab, search, statusFilter, dateFilter, sort]);
 
   const saveNextDate = async (row, date) => {
-    setItems((prev) => prev.map((it) => (it.id === row.id ? { ...it, nextFollowUpAt: date } : it)));
-    await updateCohortItem(cohortId, row.id, { nextFollowUpAt: date || null });
+    setItems((prev) => upsertItem(prev, row, { nextFollowUpAt: date }));
+    await updateCohortItem(cohortId, row.id, { clientName: row.clientName, section: row.section, nextFollowUpAt: date || null });
   };
 
   const openLog = (row) => {
@@ -217,8 +231,8 @@ export default function FollowUps() {
         lastContactByEmail: who.email,
       };
       // One entry per call: the Team page counts calls, outcomes and who made them.
-      await updateCohortItem(cohortId, row.id, { ...update, history: arrayUnion({ at: timestamp, by: who.name, byEmail: who.email, status: outcome, reason: reasonValue, note: note.slice(0, 280) }) });
-      setItems((prev) => prev.map((it) => (it.id === row.id ? { ...it, ...update } : it)));
+      await updateCohortItem(cohortId, row.id, { clientName: row.clientName, section: row.section, ...update, history: arrayUnion({ at: timestamp, by: who.name, byEmail: who.email, status: outcome, reason: reasonValue, note: note.slice(0, 280) }) });
+      setItems((prev) => upsertItem(prev, row, update));
       setActiveRow(null);
       if (outcome === FOLLOW_UP_STATUS.PROMISE) {
         setPromiseFor(row);
@@ -340,6 +354,13 @@ export default function FollowUps() {
                           <MuiLink component={RouterLink} to={`/client/${row.id}`} fontWeight={700} underline="hover">
                             {row.clientName}
                           </MuiLink>
+                          {byId.get(row.id)?.mycasePhones?.[0] && (
+                            <Tooltip title={`Call ${displayPhone(byId.get(row.id).mycasePhones[0])} with RingCentral`}>
+                              <IconButton size="small" color="primary" href={callLink(byId.get(row.id).mycasePhones[0])} sx={{ p: 0.25 }}>
+                                <PhoneRounded sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                           {row.myCaseLink && (
                             <Tooltip title="Open in MyCase">
                               <IconButton size="small" href={row.myCaseLink} target="_blank" rel="noreferrer" sx={{ p: 0.25 }}>
@@ -361,16 +382,21 @@ export default function FollowUps() {
                         <Chip size="small" label={st.label} color={st.color} variant={st.color === "default" ? "outlined" : "filled"} />
                       </TableCell>
                       <TableCell>
-                        {row.lastContactAt ? (
-                          <Tooltip title={row.lastContactSummary || ""}>
-                            <Box>
-                              <Typography variant="body2">{shortDate(row.lastContactAt)}</Typography>
-                              {row.lastContactBy && <Typography variant="caption" color="text.secondary">{row.lastContactBy}</Typography>}
-                            </Box>
-                          </Tooltip>
-                        ) : (
-                          <Typography variant="body2" color="text.disabled">—</Typography>
-                        )}
+                        {(() => {
+                          // RingCentral calls and calls logged here, whichever is newer.
+                          const c = byId.get(row.id);
+                          const lc = c ? lastContactOf(c) : null;
+                          if (!lc) return <Typography variant="body2" color="text.disabled">—</Typography>;
+                          const stale = Date.now() - lc.at.getTime() > 30 * 864e5;
+                          return (
+                            <Tooltip title={row.lastContactSummary || (lc.source === "ringcentral" ? "From RingCentral" : "")}>
+                              <Box>
+                                <Typography variant="body2" color={stale ? "error.main" : "text.primary"}>{ago(lc.at)}</Typography>
+                                {lc.by && <Typography variant="caption" color="text.secondary">{lc.by}{lc.source === "ringcentral" ? " · RC" : ""}</Typography>}
+                              </Box>
+                            </Tooltip>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <TextField

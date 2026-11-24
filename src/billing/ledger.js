@@ -51,7 +51,11 @@ export function installmentPayments(c, cutoff = new Date(8640000000000000)) {
   let initialLeft = Math.max(0, Number(c.initialPaymentAmount || 0));
   const out = [];
   const pays = (Array.isArray(c.payments) ? c.payments : [])
-    .map((p) => ({ amount: Number(p.amount || 0), date: parseDate(p.date), kind: p.kind, invoiceId: p.invoiceId != null ? String(p.invoiceId) : "" }))
+    .map((p) => ({
+      amount: Number(p.amount || 0), date: parseDate(p.date), kind: p.kind, invoiceId: p.invoiceId != null ? String(p.invoiceId) : "",
+      // Who / where, for the payment allocation report.
+      by: p.unlogged ? "MyCase (not typed in)" : String(p.paymentId || "").startsWith("mycase_") || p.source === "mycase" ? "MyCase" : p.recordedBy || "Typed in",
+    }))
     .filter((p) => p.amount > 0 && p.date)
     .sort((a, b) => a.date - b.date);
   for (const p of pays) {
@@ -66,7 +70,7 @@ export function installmentPayments(c, cutoff = new Date(8640000000000000)) {
       initialLeft -= toInitial;
       amount -= toInitial;
     }
-    if (amount > 0.005 && p.date <= cutoff) out.push({ amount, date: p.date });
+    if (amount > 0.005 && p.date <= cutoff) out.push({ amount, date: p.date, by: p.by });
   }
   return out;
 }
@@ -102,13 +106,25 @@ export function planLedger(c, asOf = new Date(), cutoff = asOf) {
     cursor.setMonth(cursor.getMonth() + 1);
   }
 
-  let pool = paidTotal;
-  for (const m of months) {
-    const take = Math.min(m.amount, pool);
-    m.paid = take;
-    pool -= take;
+  // Oldest payment to oldest unpaid installment; `pieces` records which payment paid what.
+  let i = 0;
+  let prepaid = 0;
+  for (const m of months) m.pieces = [];
+  for (const p of pays) {
+    let left = p.amount;
+    while (left > 0.005 && i < months.length) {
+      const m = months[i];
+      const take = Math.min(m.amount - m.paid, left);
+      if (take > 0.005) {
+        m.paid += take;
+        m.pieces.push({ date: p.date, amount: take, by: p.by });
+        left -= take;
+      }
+      if (m.paid >= m.amount - 0.005) i++;
+    }
+    prepaid += Math.max(0, left);
   }
-  return { months, balance: Math.max(0, cap - paidTotal), paidTotal, prepaid: Math.max(0, pool) };
+  return { months, balance: Math.max(0, cap - paidTotal), paidTotal, prepaid };
 }
 
 /**
@@ -139,17 +155,9 @@ export function clientPosition(client, asOf = new Date()) {
   let monthsBehind = 0;
   let balance = 0;
   let planEnded = false;
-  // An initial payment that was never paid (or was refunded) is owed from its date.
+  // An initial payment never paid (or refunded) is the intake team's (Initial payments
+  // page): reported as initialOwed, not counted in what the plans say is owed.
   const initialOwed = String(client.status || "").toLowerCase() === "closed" ? 0 : unpaidInitial(client);
-  if (initialOwed > 0.005) {
-    const d = parseDate(client.initialPaymentDate) || asOf;
-    if (d <= asOf) {
-      monthsBehind++;
-      if (ymOf(d) < cur) pastDue += initialOwed;
-      else thisMonth += initialOwed;
-    }
-    balance += initialOwed;
-  }
   for (const v of planViews(client)) {
     const { months, balance: b } = planLedger(v, asOf);
     balance += b;
@@ -163,7 +171,7 @@ export function clientPosition(client, asOf = new Date()) {
     const owed = months.reduce((s, m) => s + Math.max(0, m.amount - m.paid), 0);
     if (owed > 0.005 && owed >= b - 0.5) planEnded = true;
   }
-  return { pastDue, thisMonth, owedNow: pastDue + thisMonth, monthsBehind, balance, planEnded };
+  return { pastDue, thisMonth, owedNow: pastDue + thisMonth, monthsBehind, balance, planEnded, initialOwed };
 }
 
 /**
@@ -172,32 +180,89 @@ export function clientPosition(client, asOf = new Date()) {
  * (payments go to the oldest month first). So a client who owed September and October
  * is not expected for October; once they pay September they move up and October's
  * installment counts as due (and whatever they paid toward it as collected).
+ * Client-wide: an earlier month unpaid on ANY plan (an ended plan included) means the
+ * client was behind, so none of their plans count for the month. Same clients as Home's
+ * "Past due this month", the Follow-ups list and Payment allocation.
  */
 export function monthDueCollected(client, ym, cutoff) {
   const [y, m] = ym.split("-").map(Number);
   const monthEnd = new Date(y, m, 0, 23, 59, 59);
   let due = 0;
   let collected = 0;
-  let clients = 0;
+  let any = false;
   for (const v of planViews(client)) {
     const { months } = planLedger(v, monthEnd, cutoff);
-    const i = months.findIndex((x) => x.ym === ym);
-    if (i === -1) continue;
-    const before = months.slice(0, i);
-    if (before.some((x) => x.paid < x.amount - 0.005)) continue; // still behind: not expected this month
-    due += months[i].amount;
-    collected += months[i].paid;
-    clients++;
+    // Still behind on an earlier month: not expected this month (on any plan).
+    if (months.some((x) => x.ym < ym && x.paid < x.amount - 0.005)) return { due: 0, collected: 0, clients: 0 };
+    const cur = months.find((x) => x.ym === ym);
+    if (!cur) continue;
+    due += cur.amount;
+    collected += cur.paid;
+    any = true;
   }
-  return { due, collected, clients: clients ? 1 : 0 };
+  return { due, collected, clients: any ? 1 : 0 };
+}
+
+/**
+ * The installment(s) of month `ym` (one per plan), what was due, what has been paid
+ * toward it as of `asOf`, and which payments paid it (oldest payment first).
+ * Returns [] when the client had no installment that month.
+ */
+export function allocationForMonth(client, ym, asOf = new Date()) {
+  if (String(client.status || "").toLowerCase() === "closed") return [];
+  const out = [];
+  for (const v of planViews(client)) {
+    const months = planLedger(v, asOf).months;
+    const i = months.findIndex((x) => x.ym === ym);
+    const m = months[i];
+    // Up to date going into the month (every earlier installment paid): the clients the
+    // collection rate and "Past due this month" count.
+    if (m) m.wasCurrent = months.slice(0, i).every((x) => x.paid >= x.amount - 0.005);
+    if (m) out.push({
+      wasCurrent: m.wasCurrent, plan: v.planCount > 1 ? `Plan ${v.planIndex + 1}${v.planInvoiceNumber ? ` (inv ${v.planInvoiceNumber})` : ""}` : null, due: m.amount, paid: m.paid, pieces: m.pieces || [] });
+  }
+  return out;
+}
+
+/**
+ * Installment money received this month (payment plans only: initial payments are left
+ * out), and where it went:
+ *   thisMonth  this month's installment
+ *   catchUp    older months the client still owed (they were behind)
+ *   ahead      future months (paid ahead), or a closed client's plan
+ */
+export function monthMoneySplit(client, asOf = new Date()) {
+  const cur = ymOf(asOf);
+  const monthStart = new Date(asOf.getFullYear(), asOf.getMonth(), 1);
+  const monthEnd = new Date(asOf.getFullYear(), asOf.getMonth() + 1, 0, 23, 59, 59);
+  const out = { total: 0, thisMonth: 0, catchUp: 0, ahead: 0 };
+  for (const v of planViews(client)) {
+    out.total += installmentPayments(v, asOf).filter((p) => p.date >= monthStart).reduce((s, p) => s + p.amount, 0);
+    for (const m of planLedger(v, monthEnd, asOf).months) {
+      for (const piece of m.pieces || []) {
+        if (piece.date < monthStart) continue;
+        if (m.ym === cur) out.thisMonth += piece.amount;
+        else if (m.ym < cur) out.catchUp += piece.amount;
+      }
+    }
+  }
+  out.ahead = Math.max(0, out.total - out.thisMonth - out.catchUp);
+  return out;
+}
+
+/** Installment money (no initial payments) received between two dates, all plans. */
+export function installmentPaidBetween(client, from, to) {
+  let s = 0;
+  for (const v of planViews(client)) s += installmentPayments(v, to).filter((p) => p.date >= from).reduce((t, p) => t + p.amount, 0);
+  return s;
 }
 
 /** Accountant aging buckets, by days since the 1st of the installment's month. */
 export const AGING_BUCKETS = [
-  { key: "b0", label: "0–30 days", help: "This month's installment, due or not yet due" },
-  { key: "b30", label: "31–60 days", help: "Last month's installment" },
-  { key: "b60", label: "61–90 days", help: "Two months back" },
-  { key: "b90", label: "90+ days", help: "Three months back or older" },
+  { key: "b0", label: "0–30 days", help: "Clients who only owe this month's installment" },
+  { key: "b30", label: "31–60 days", help: "Clients whose oldest unpaid installment is last month's" },
+  { key: "b60", label: "61–90 days", help: "Oldest unpaid installment two months back" },
+  { key: "b90", label: "90+ days", help: "Oldest unpaid installment three months back or older" },
 ];
 
 const monthsBetween = (ymA, ymB) => {
@@ -224,14 +289,27 @@ export function agingOf(client, asOf = new Date()) {
     out[k] += amount;
     out.total += amount;
   };
-  const initialOwed = unpaidInitial(client);
-  if (initialOwed > 0.005) {
-    const d = parseDate(client.initialPaymentDate);
-    if (d && d <= monthEnd) add(ymOf(d), initialOwed);
-  }
+  // Unpaid initial payments are left out (intake's; see clientPosition).
   for (const v of planViews(client)) {
     for (const m of planLedger(v, monthEnd, asOf).months) add(m.ym, m.amount - m.paid);
   }
+  return out;
+}
+
+/**
+ * Aging by client: everything a client owes goes in ONE bucket, set by their oldest
+ * unpaid installment. So a client who owed October and November (31–60) and pays
+ * October moves to 0–30 at once, and 0–30 = clients who only owe this month (= Past due
+ * this month, plus any initial payment still unpaid this month).
+ * Returns { b0, b30, b60, b90, total, oldest } (oldest: the bucket key, or null).
+ */
+export function clientAging(client, asOf = new Date()) {
+  const a = agingOf(client, asOf);
+  const out = { b0: 0, b30: 0, b60: 0, b90: 0, total: a.total, oldest: null };
+  if (a.total <= 0.005) return out;
+  const oldest = ["b90", "b60", "b30", "b0"].find((k) => a[k] > 0.005) || "b0";
+  out[oldest] = a.total;
+  out.oldest = oldest;
   return out;
 }
 

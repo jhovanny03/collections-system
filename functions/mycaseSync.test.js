@@ -317,3 +317,38 @@ test("Add plan with adjustments: $350 the first month, $1,000 for 6 months, $500
   assert.throws(() => buildSetupClient({ caseDoc, invoices, roles, plans: [{ invoiceId: "20", monthlyAmount: 500, adjustments: [{ amount: 300, start: "2025-12" }] }] }), /starts before the plan/);
   assert.throws(() => buildSetupClient({ caseDoc, invoices, roles, plans: [{ invoiceId: "20", monthlyAmount: 500, adjustments: [{ amount: 300, start: "2026-03", months: 0 }] }] }), /how many months/);
 });
+
+test("initial payment not completed: which invoice, and which group", () => {
+  const { initialFlags } = require("./mycaseSync");
+  const k = { status: "open", name: "A (11-26) DOE, JANE (T-VISA)" };
+  const ip = { id: "1", status: "partial", total: 4500, paid: 2000, invoiceDate: "2026-11-01" };
+  const plan = { id: "2", status: "sent", total: 6000, paid: 0, invoiceDate: "2026-11-05" };
+  // Not in Collections, started paying the first invoice
+  assert.equal(initialFlags(k, [ip, plan], null, null).initialState, "started");
+  assert.equal(initialFlags(k, [ip, plan], null, null).initialDue, 2500);
+  // Nothing paid yet
+  assert.equal(initialFlags(k, [{ ...ip, paid: 0 }], null, null).initialState, "notStarted");
+  // Rebuilt client: only the invoice tagged "initial" counts
+  const rebuilt = { invoiceRoles: { 1: "initial", 2: "installment" } };
+  assert.equal(initialFlags(k, [ip, plan], rebuilt, "c1").initialState, "client");
+  assert.equal(initialFlags(k, [plan], { invoiceRoles: { 2: "installment" } }, "c1").initialState, null);
+  // Hand-entered client: the invoice for exactly the initial amount
+  assert.equal(initialFlags(k, [ip, plan], { initialPaymentAmount: 4500 }, "c1").initialInvoiceId, "1");
+  // Paid in full, potential client, closed
+  assert.equal(initialFlags(k, [{ ...ip, paid: 4500 }], null, null).initialState, null);
+  assert.equal(initialFlags({ ...k, name: "Potential Case: Jane Doe" }, [ip], null, null).initialState, "potential");
+  assert.equal(initialFlags({ ...k, status: "closed" }, [ip], null, null).initialState, null);
+});
+
+test("an initial payment split over two invoices is added up", () => {
+  const { initialFlags } = require("./mycaseSync");
+  const k = { status: "open", name: "A (11-25) DOE, JANE" };
+  const a = { id: "1", status: "paid", total: 1350, paid: 1350, invoiceDate: "2025-11-07" };
+  const b = { id: "2", status: "overdue", total: 3000, paid: 1500, invoiceDate: "2026-03-01" };
+  const f = initialFlags(k, [a, b], { invoiceRoles: { 1: "initial", 2: "initial" } }, "c1");
+  assert.equal(f.initialState, "client");
+  assert.equal(f.initialTotal, 4350);
+  assert.equal(f.initialPaid, 2850);
+  assert.equal(f.initialDue, 1500);
+  assert.equal(f.initialInvoiceId, "2");
+});

@@ -12,6 +12,10 @@ import { useAuth } from "../auth/useAuth";
 import { clientRows, money } from "../billing/portfolio";
 import { describeSchedule, sortedPlans, planSchedule } from "../billing/plans";
 import { StatCard, Tiles } from "../ui/kit";
+import { callLink, displayPhone, ago } from "../billing/contact";
+import PhoneRounded from "@mui/icons-material/PhoneRounded";
+import { useClients } from "../data/ClientsProvider";
+import { withMyCasePayments, caseIdOf } from "../billing/mycaseOverlay";
 
 import InvoiceSection from "../InvoiceSection";
 import CaseSwitcher from "./CaseSwitcher";
@@ -55,7 +59,19 @@ function ClientDashboard() {
     );
   }, [clientId]);
 
-  const row = useMemo(() => (client ? clientRows([client])[0] : null), [client]);
+  // MyCase payments on this case that nobody typed in yet (hand-entered clients): they
+  // count in the figures here like everywhere else; the team still logs them below.
+  // Worked out from the live client, so a payment typed in a moment ago matches at once.
+  const { mycaseByCase } = useClients();
+  const billing = useMemo(() => (client ? withMyCasePayments(client, mycaseByCase?.get(caseIdOf(client) || "")) : null), [client, mycaseByCase]);
+  const row = useMemo(() => (billing ? clientRows([billing])[0] : null), [billing]);
+  // Hand-entered client counted from MyCase: how the typed payments compare.
+  const fromMyCase = billing && billing.typedPayments ? {
+    n: billing.payments.length,
+    total: billing.payments.reduce((t, p) => t + p.amount, 0),
+    typedN: billing.typedPayments.length,
+    typedTotal: billing.typedPayments.reduce((t, p) => t + Number(p.amount || 0), 0),
+  } : null;
   const tabs = TABS.filter((t) => editor || !t.editor);
   const wanted = params.get("recordPayment") ? "payments" : params.get("tab");
   const tab = tabs.some((t) => t.key === wanted) ? wanted : "overview";
@@ -95,17 +111,32 @@ function ClientDashboard() {
               {client.paymentHold?.active && <Chip size="small" label="On hold" color="warning" />}
               {client.awaitingPlan && <Chip size="small" label="Waiting for a plan" color="info" />}
               {row?.planEnded && <Chip size="small" label="Plan ended, still owes" color="error" />}
-              <Chip size="small" variant="outlined" label={row?.source === "Hand-entered" ? "Payments typed by hand" : "Payments sync from MyCase"} />
+              {row?.needsContact && <Chip size="small" label={row.lastContact ? "No contact in 30+ days" : "Never contacted"} color="error" variant="outlined" />}
+              {client.callStats?.missedCallback && <Chip size="small" label="Called us, missed: call back" color="secondary" />}
+              <Chip size="small" variant="outlined" label={row?.source === "Typed by hand" ? "Payments typed by hand (no MyCase link)" : row?.source === "MyCase, invoices to tag" ? "Payments from MyCase · invoices to tag" : "Payments sync from MyCase"} />
               {client.caseStatus && <Chip size="small" variant="outlined" label={`Case: ${client.caseStatus}`} />}
             </Stack>
           </Box>
-          {client.myCaseLink && (
-            <Button variant="outlined" endIcon={<OpenInNewRounded />} href={client.myCaseLink} target="_blank" rel="noopener noreferrer" sx={{ flexShrink: 0 }}>
-              Open in MyCase
-            </Button>
-          )}
+          <Stack spacing={1} alignItems={{ md: "flex-end" }} sx={{ flexShrink: 0 }}>
+            {(client.mycasePhones || []).slice(0, 3).map((p, i) => (
+              <Button key={p} variant={i === 0 ? "contained" : "outlined"} startIcon={<PhoneRounded />} href={callLink(p)} title="Call with RingCentral">
+                {displayPhone(p)}
+              </Button>
+            ))}
+            {client.myCaseLink && (
+              <Button variant="outlined" endIcon={<OpenInNewRounded />} href={client.myCaseLink} target="_blank" rel="noopener noreferrer">
+                Open in MyCase
+              </Button>
+            )}
+          </Stack>
         </Stack>
 
+        {fromMyCase && (
+          <Alert severity="info" variant="outlined" sx={{ mt: 2 }}>
+            The figures here use the {fromMyCase.n} payment{fromMyCase.n === 1 ? "" : "s"} MyCase received on this case ({money(fromMyCase.total)}).
+            {" "}The {fromMyCase.typedN} payment{fromMyCase.typedN === 1 ? "" : "s"} typed in by hand ({money(fromMyCase.typedTotal)}, on the Payments tab) are kept for reference but not counted.
+          </Alert>
+        )}
         <Tiles min={170} gap={1.5} sx={{ mt: 2.5 }}>
           <StatCard label="Owed now" value={row?.amountDue ? money(row.amountDue) : "$0"} sub={row?.amountDue ? `${row.missedMonths} installment${row.missedMonths === 1 ? "" : "s"} unpaid` : "Up to date"} tone={row?.amountDue ? "bad" : "good"} help="Installments due by today (the 15th of each month) that are not fully paid." />
           <StatCard label="Balance left" value={money(row?.balance)} sub={row?.paidInFull ? "Paid in full" : "On the plan"} />
@@ -116,6 +147,31 @@ function ClientDashboard() {
             help={monthly}
           />
           <StatCard label="Last payment" value={row?.lastPayment ? money(row.lastPayment.amount) : "—"} sub={row?.lastPayment?.date || "No installments yet"} />
+          <StatCard
+            label="Last contacted"
+            value={row?.lastContact ? ago(row.lastContact.at) : "Never"}
+            sub={
+              row?.lastContact
+                ? `${row.lastContact.at.toLocaleDateString("en-US", { month: "short", day: "numeric" })}${row.lastContact.by ? ` · ${row.lastContact.by}` : ""}${row.lastContact.source === "ringcentral" ? " · RingCentral" : ""}`
+                : "No call on record"
+            }
+            tone={row?.needsContact ? "danger" : "default"}
+            help="A call that reached the client (or a voicemail left) from RingCentral, or a follow-up call logged in the app."
+          />
+          {(() => {
+            const s = client.callStats;
+            if (!s) return <StatCard label="Calls this month" value="—" sub="From RingCentral, once connected" />;
+            const made = s.attemptsThisMonth || 0;
+            const received = s.receivedThisMonth ?? 0;
+            return (
+              <StatCard
+                label="Calls this month"
+                value={String(s.callsThisMonth ?? made + received)}
+                sub={`${made} made · ${received} received · talked ${s.reachedThisMonth || 0}×`}
+                help={`All RingCentral calls with this client this month. "Talked" = the call lasted 40 seconds or more. ${Math.round((s.talkSecTotal || 0) / 60)} min talked in total since the firm moved to RingCentral.`}
+              />
+            );
+          })()}
           <StatCard label="Promise" value={client.paymentPromise?.amount ? money(client.paymentPromise.amount) : "None"} sub={client.paymentPromise?.date ? `on ${String(client.paymentPromise.date).slice(0, 10)}` : undefined} tone={client.paymentPromise?.amount ? "warn" : "default"} />
         </Tiles>
       </Card>

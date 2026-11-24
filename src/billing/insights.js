@@ -1,7 +1,7 @@
 // src/billing/insights.js
 // Aging trend, collection forecast, write-off risk and plan health, all from the
 // installment ledger (src/billing/ledger.js) so they agree with every other number.
-import { agingOf, clientPosition, planProjection, lastPaymentDate, monthDueCollected, planLedger } from "./ledger";
+import { clientAging, clientPosition, planProjection, lastPaymentDate, monthDueCollected, planLedger } from "./ledger";
 import { planViews } from "./plans";
 import { parseDate } from "../utils/dates";
 
@@ -29,7 +29,7 @@ export function agingTrend(clients, n = 12, asOf = new Date()) {
       if (isClosed(c)) continue;
       let a;
       try {
-        a = agingOf(c, at);
+        a = clientAging(c, at);
       } catch (e) {
         continue;
       }

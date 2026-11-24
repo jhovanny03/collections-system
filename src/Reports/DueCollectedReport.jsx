@@ -4,7 +4,7 @@
 // of them was paid. Pick a month to see it by case type and who has not paid yet.
 import React, { useMemo, useState } from "react";
 import {
-  Box, Button, Card, Chip, LinearProgress, MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Box, Button, Chip, LinearProgress, MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, Typography, Link as MuiLink,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";

@@ -8,10 +8,6 @@
     ],
     "rewrites": [
       {
-        "source": "/api/mycase/callback",
-        "function": "mycaseCallback"
-      },
-      {
         "source": "**",
         "destination": "/index.html"
       }

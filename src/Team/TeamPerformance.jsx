@@ -15,6 +15,7 @@ import { useClients } from "../data/ClientsProvider";
 import { money, pct, ymOf, ymdOf } from "../billing/portfolio";
 import { chartColors } from "../theme/brand";
 import { PageHeader, StatCard, Section, Tiles, Empty } from "../ui/kit";
+import PhoneActivity from "./PhoneActivity";
 import { parseDate } from "../utils/dates";
 
 const PERIODS = [
@@ -284,6 +285,8 @@ export default function TeamPerformance() {
               </TableContainer>
             )}
           </Section>
+
+          <PhoneActivity from={from} to={to} />
 
           {data.weeks.length > 0 && (
             <Section title="Follow-up calls per week" subtitle="Calls logged on the Follow-ups page, by person" sx={{ mb: 3 }}>

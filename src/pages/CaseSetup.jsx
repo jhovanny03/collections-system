@@ -336,8 +336,8 @@ export default function CaseSetup() {
     return onSnapshot(
       q,
       (snap) => setCases(snap.docs.map((d) => d.data()).sort(tab === "plan"
-        // Waiting for a plan: oldest first (billing's welcome call is due within 7 days).
-        ? (a, b) => String(a.openedDate || "").localeCompare(String(b.openedDate || ""))
+        // Waiting for a plan: oldest initial-payment invoice first (welcome call due 7 days after it).
+        ? (a, b) => String(a.ipInvoiceDate || a.openedDate || "").localeCompare(String(b.ipInvoiceDate || b.openedDate || ""))
         : (a, b) => (b.openBalance || 0) - (a.openBalance || 0))),
       (e) => { console.error(e); setError("Could not load cases. You may not have access."); setCases([]); }
     );
@@ -452,6 +452,7 @@ export default function CaseSetup() {
                       {c.caseNumber ? `#${c.caseNumber}` : `Case ${c.id}`}
                     </Link>
                     {c.openedDate && <Typography variant="caption" color="text.secondary"> · opened {c.openedDate}</Typography>}
+                    {tab === "plan" && c.ipInvoiceDate && <Typography variant="caption" color="text.secondary"> · initial invoice {c.ipInvoiceDate}</Typography>}
                     {tab === "plan" && (
                       <Box sx={{ mt: 0.5 }}>
                         {c.flatFee > 0 && (
@@ -460,10 +461,19 @@ export default function CaseSetup() {
                             {c.uninvoicedFee > 0 ? ` · ${money(c.uninvoicedFee)} not invoiced yet` : " · fully invoiced"}
                           </Typography>
                         )}
-                        {daysSince(c.openedDate) > 7 && (
-                          <Chip size="small" color="warning" sx={{ height: 20 }}
-                            label={`Opened ${daysSince(c.openedDate)} days ago: welcome call due`} />
-                        )}
+                        {(() => {
+                          // Welcome call: due 7 days after intake's initial-payment invoice.
+                          const from = c.ipInvoiceDate || c.openedDate;
+                          if (!from) return null;
+                          const left = 7 - daysSince(from);
+                          const due = new Date(`${from}T12:00:00`);
+                          due.setDate(due.getDate() + 7);
+                          const when = due.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                          return (
+                            <Chip size="small" color={left < 0 ? "error" : left <= 2 ? "warning" : "default"} variant={left < 0 ? "filled" : "outlined"} sx={{ height: 20 }}
+                              label={left < 0 ? `Welcome call overdue ${-left} day${left === -1 ? "" : "s"} (due ${when})` : left === 0 ? "Welcome call due today" : `Welcome call due ${when} (${left} day${left === 1 ? "" : "s"})`} />
+                          );
+                        })()}
                       </Box>
                     )}
                     {tab === "setup" && (

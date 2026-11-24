@@ -79,7 +79,7 @@ export default function ReportsOverview() {
 
       <Tiles min={200} sx={{ mb: 3 }}>
         <StatCard label="Outstanding" value={money(s.outstanding)} sub={`${s.outstandingClients.toLocaleString()} clients · due by today, not paid`} help="Every installment the plans say should have been paid by today and has not been, all plans." />
-        <StatCard label="Past due this month" value={money(s.pastDue.amount)} sub={`${s.pastDue.clients.toLocaleString()} clients missed this month's installment`} tone="bad" />
+        <StatCard label="Past due this month" value={money(s.pastDue.amount)} sub={`${s.pastDue.clients.toLocaleString()} clients who were current missed this month's installment`} tone="bad" />
         <StatCard label="Left to collect on plans" value={money(s.leftOnPlans)} sub={`${s.clients.inPlan.toLocaleString()} clients still paying`} help="Everything still to be collected on all plans, including installments not due yet." />
         <StatCard label="Plan ended, still owes" value={money(planEnded.reduce((t, r) => t + r.amountDue, 0))} sub={`${planEnded.length} clients · included in Outstanding`} tone="danger" help="Every month of their plan has passed and they still owe. These need a special call." />
         <StatCard label="Collection rate this month" value={pct(s.month.collectionRate)} sub={`${money(s.month.collectedOnPlan)} of ${money(s.month.expected)}`} tone={s.month.collectionRate >= 0.8 ? "good" : "warn"} />
@@ -161,6 +161,10 @@ export default function ReportsOverview() {
               </TableBody>
             </Table>
           </TableContainer>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", px: 2.25, pt: 1.5 }}>
+            Each client is in one bucket, by their oldest unpaid month, with everything they owe: a client who pays their oldest month moves to a newer bucket at once. 0–30 days = clients who only owe {new Date().toLocaleString("en-US", { month: "long" })}
+            {Math.abs(s.buckets[0].amount - s.pastDue.amount) < 1 ? " (= Past due this month)." : `: ${money(s.pastDue.amount)} Past due this month + ${money(Math.max(0, s.buckets[0].amount - s.pastDue.amount))} other.`}
+          </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", px: 2.25, py: 1.5 }}>
             By source: {bySource.map((b) => `${b.source} ${b.pastDue}/${b.clients} past due`).join(" · ")}
           </Typography>
