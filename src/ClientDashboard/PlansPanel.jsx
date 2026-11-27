@@ -80,7 +80,7 @@ export default function PlansPanel({ client }) {
                 <Stat label="Paid toward plan" value={money(paid)} />
                 <Stat label="Remaining" value={money(snap.remainingBalance)} />
                 <Stat label="Amount due" value={money(snap.amountDue)} tone={snap.amountDue > 0 ? "error" : undefined} />
-                <Stat label="Next due" value={snap.nextExpectedLabel || "—"} />
+                <Stat label="Next due" value={Number(snap.remainingBalance || 0) <= 0.005 ? "Nothing left" : snap.nextExpectedLabel || "—"} />
                 <Stat label="Last payment" value={snap.lastPayment ? `${formatDate(snap.lastPayment.date)} · ${money(snap.lastPayment.amount)}` : "—"} />
               </Stack>
             </Box>

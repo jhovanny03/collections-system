@@ -141,6 +141,16 @@ export function planUpdates(client, plans) {
 // date before any real payment.
 const NO_DOWN_PAYMENT = "1900-01-01";
 
+// A service billed as its own plan (plan.service) replaces the hand-entered adjustment billing
+// used for it before ("Removal Defense", "Derivative add-on" on the Invoice section); the
+// first plan's view leaves those adjustments out so the service is not counted twice.
+const SERVICE_ADJUSTMENT_TYPE = { "Removal defense": "REMOVAL_DEFENSE", Derivative: "DERIVATIVE_ADD_ON" };
+function adjustmentsWithoutPlannedServices(client, plans) {
+  const list = Array.isArray(client.invoiceAdjustments) ? client.invoiceAdjustments : [];
+  const covered = new Set(plans.map((p) => SERVICE_ADJUSTMENT_TYPE[p.service]).filter(Boolean));
+  return covered.size ? list.filter((a) => !covered.has(String(a?.type || "").toUpperCase())) : list;
+}
+
 /**
  * Which plan a recorded payment belongs to: its invoice's plan if it has one;
  * otherwise the first plan (initial payments, hand-entered payments, other invoices).
@@ -163,9 +173,11 @@ export function planViews(client) {
   const buckets = plans.map(() => []);
   for (const p of client.payments || []) buckets[planIndexForPayment(p, plans)].push(p);
 
+  const firstAdjustments = adjustmentsWithoutPlannedServices(client, plans);
   return plans.map((plan, i) => {
     const base = {
       ...client,
+      invoiceAdjustments: firstAdjustments,
       planIndex: i,
       planCount: plans.length,
       planInvoiceId: String(plan.invoiceId),

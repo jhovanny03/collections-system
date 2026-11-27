@@ -277,6 +277,32 @@ function lastInstallment(c) {
   };
 } exports.summarize = summarize;
 
+/**
+ * Payment-plan money (installments only, no initial payments) received each day of this
+ * month up to today, and each day of last month: Home's calendar and its pace line.
+ * { month: "2026-11", days: [day 1, day 2, … today], lastMonth: "2026-10", lastDays: [every day] }
+ */
+ function planMoneyByDay(clients, asOf = new Date()) {
+  const y = asOf.getFullYear(), m = asOf.getMonth();
+  const thisStart = new Date(y, m, 1), lastStart = new Date(y, m - 1, 1);
+  const days = new Array(asOf.getDate()).fill(0);
+  const lastDays = new Array(new Date(y, m, 0).getDate()).fill(0);
+  for (const c of clients) {
+    let pays = [];
+    try {
+      pays = _ledger.installmentPaymentsBetween.call(void 0, c, lastStart, asOf);
+    } catch (e) {
+      continue; // no plan
+    }
+    for (const p of pays) {
+      if (p.date >= thisStart) days[p.date.getDate() - 1] += p.amount;
+      else lastDays[p.date.getDate() - 1] += p.amount;
+    }
+  }
+  const round = (a) => a.map((v) => Math.round(v * 100) / 100);
+  return { month: exports.ymOf.call(void 0, asOf), days: round(days), lastMonth: exports.ymOf.call(void 0, lastStart), lastDays: round(lastDays) };
+} exports.planMoneyByDay = planMoneyByDay;
+
 /** Money received per month for the last `n` months (oldest first). */
  function collectionsByMonth(payments, n = 12, asOf = new Date()) {
   const keys = [];

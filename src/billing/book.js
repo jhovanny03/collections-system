@@ -3,7 +3,7 @@
 // from the same per-client calculation as the client profile and A/R Aging, so numbers
 // agree everywhere. No UI code here: the server runs this same file (scripts/build-shared.js
 // copies it to functions/shared) to prepare the figures pages read (functions/portfolioSnapshot.js).
-import { clientPosition, monthDueCollected, agingOf, clientAging, monthMoneySplit, installmentPaidBetween, AGING_BUCKETS } from "./ledger";
+import { clientPosition, monthDueCollected, agingOf, clientAging, monthMoneySplit, installmentPaidBetween, installmentPaymentsBetween, AGING_BUCKETS } from "./ledger";
 import { parseDate } from "../utils/dates";
 import { lastContactOf, needsContact } from "./contact";
 export { AGING_BUCKETS };
@@ -274,6 +274,32 @@ export function summarize(rows, payments, asOf = new Date()) {
       week: rows.reduce((t, r) => t + r.planPaidWeek, 0),
     },
   };
+}
+
+/**
+ * Payment-plan money (installments only, no initial payments) received each day of this
+ * month up to today, and each day of last month: Home's calendar and its pace line.
+ * { month: "2026-11", days: [day 1, day 2, … today], lastMonth: "2026-10", lastDays: [every day] }
+ */
+export function planMoneyByDay(clients, asOf = new Date()) {
+  const y = asOf.getFullYear(), m = asOf.getMonth();
+  const thisStart = new Date(y, m, 1), lastStart = new Date(y, m - 1, 1);
+  const days = new Array(asOf.getDate()).fill(0);
+  const lastDays = new Array(new Date(y, m, 0).getDate()).fill(0);
+  for (const c of clients) {
+    let pays = [];
+    try {
+      pays = installmentPaymentsBetween(c, lastStart, asOf);
+    } catch (e) {
+      continue; // no plan
+    }
+    for (const p of pays) {
+      if (p.date >= thisStart) days[p.date.getDate() - 1] += p.amount;
+      else lastDays[p.date.getDate() - 1] += p.amount;
+    }
+  }
+  const round = (a) => a.map((v) => Math.round(v * 100) / 100);
+  return { month: ymOf(asOf), days: round(days), lastMonth: ymOf(lastStart), lastDays: round(lastDays) };
 }
 
 /** Money received per month for the last `n` months (oldest first). */

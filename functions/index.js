@@ -746,6 +746,83 @@ exports.refreshPortfolioNow = functions
     return require("./portfolioSnapshot").refreshPortfolio(appDb(), { by: email });
   });
 
+// Anthropic key for the AI features (briefing notes, case titles).
+const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
+
+/* Data quality "Termination & closing": preview, or (run) have Claude read the unclear case
+   titles (names taken out: functions/closeCheckAi.js), then update the figures. */
+exports.checkCaseTitles = functions
+  .runWith({ timeoutSeconds: 300, memory: "1GB", secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    const email = await requireEditor(context);
+    const run = !!(data && data.run);
+    let client = null;
+    if (run) {
+      let key = process.env.ANTHROPIC_API_KEY || "";
+      if (!key) {
+        try {
+          key = ANTHROPIC_API_KEY.value();
+        } catch (e) {
+          key = "";
+        }
+      }
+      if (key) {
+        const Anthropic = require("@anthropic-ai/sdk").default;
+        client = new Anthropic({ apiKey: key, maxRetries: 2 });
+      }
+    }
+    try {
+      const out = await require("./closeCheckAi").checkCaseTitles(appDb(), { run, client, by: email });
+      if (run && out.read) out.portfolio = await require("./portfolioSnapshot").refreshPortfolio(appDb(), { by: email });
+      return out;
+    } catch (err) {
+      const Anthropic = require("@anthropic-ai/sdk").default;
+      let message = err.message || "Could not read the titles.";
+      if (err instanceof Anthropic.AuthenticationError) message = "The AI key was not accepted. Check the key in anthropic.env.";
+      else if (err instanceof Anthropic.RateLimitError) message = "The AI service is busy. Try again in a minute.";
+      else if (err instanceof Anthropic.APIConnectionError) message = "Could not reach the AI service. Check the internet connection.";
+      else if (err instanceof Anthropic.APIError) message = `The AI service returned an error (${err.status || "?"}). Try again.`;
+      console.error("checkCaseTitles", err);
+      throw new functions.https.HttpsError("failed-precondition", message);
+    }
+  });
+
+/* Monthly briefing "AI notes": read the saved notes, or (regenerate) have Claude rewrite them
+   from the month's firm-level totals. Only totals are sent: functions/briefingNotes.js. */
+exports.briefingNotes = functions
+  .runWith({ timeoutSeconds: 180, secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data, context) => {
+    const email = await requireEditor(context);
+    const { briefingNotes } = require("./briefingNotes");
+    const regenerate = !!(data && data.regenerate);
+    let key = process.env.ANTHROPIC_API_KEY || "";
+    if (regenerate && !key) {
+      try {
+        key = ANTHROPIC_API_KEY.value();
+      } catch (e) {
+        key = "";
+      }
+    }
+    let client = null;
+    if (regenerate && key) {
+      const Anthropic = require("@anthropic-ai/sdk").default;
+      client = new Anthropic({ apiKey: key, maxRetries: 2 });
+    }
+    try {
+      return await briefingNotes(appDb(), { month: data && data.month, facts: data && data.facts, regenerate, by: email, client });
+    } catch (err) {
+      const Anthropic = require("@anthropic-ai/sdk").default;
+      let message = err.message || "Could not write the notes.";
+      if (err instanceof Anthropic.AuthenticationError) message = "The AI key was not accepted. Check the key in anthropic.env.";
+      else if (err instanceof Anthropic.PermissionDeniedError) message = "The AI key does not have access to this model.";
+      else if (err instanceof Anthropic.RateLimitError) message = "The AI service is busy. Try again in a minute.";
+      else if (err instanceof Anthropic.APIConnectionError) message = "Could not reach the AI service. Check the internet connection.";
+      else if (err instanceof Anthropic.APIError) message = `The AI service returned an error (${err.status || "?"}). Try again.`;
+      console.error("briefingNotes", err);
+      throw new functions.https.HttpsError("failed-precondition", message);
+    }
+  });
+
 
 exports.importMyCasePayments = onSchedule(
   {
@@ -859,9 +936,10 @@ exports.resolveMyCaseReview = functions.https.onCall(async (data, context) => {
     }
     if (action === "tag") {
       // For "installment", data.plan = { monthlyAmount, startDate } makes it its own plan.
-      return await tagReviewItem(db, reviewId, String(data.role || ""), email, data.plan || null);
+      // data.service: which service the invoice is for ("Main case", "Removal defense"...).
+      return await tagReviewItem(db, reviewId, String(data.role || ""), email, data.plan || null, data.service ? String(data.service) : null);
     }
-    return await retryReviewItem(db, reviewId);
+    return await retryReviewItem(db, reviewId, email);
   } catch (err) {
     throw new functions.https.HttpsError("failed-precondition", err.message || "Action failed.");
   }
@@ -892,6 +970,25 @@ exports.keepMyCaseRecord = functions.https.onCall(async (data, context) => {
   }
 });
 
+/* Case Setup, "New MyCase cases": take a case off the list (terminated, not a client),
+ * or put it back (undo). The sync keeps it off (caseFlags reads setupDismissed). */
+exports.dismissMyCaseCaseSetup = functions.https.onCall(async (data, context) => {
+  const email = await requireEditor(context);
+  const caseId = String((data && data.caseId) || "");
+  if (!/^\d+$/.test(caseId)) throw new functions.https.HttpsError("invalid-argument", "caseId required.");
+  const ref = appDb().collection("mycaseCases").doc(caseId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "Case not found.");
+  const k = snap.data();
+  if (data && data.undo) {
+    await ref.set({ setupDismissed: null, needsSetup: Number(k.openBalance || 0) > 0 && !k.trackedClientId && k.status !== "closed" }, { merge: true });
+    return { ok: true, restored: true };
+  }
+  const reason = String((data && data.reason) || "Terminated / not a client").slice(0, 200);
+  await ref.set({ setupDismissed: { at: new Date().toISOString(), by: email, reason }, needsSetup: false, autoCreate: false }, { merge: true });
+  return { ok: true };
+});
+
 /* Case Setup, "Waiting for a plan": the fee was paid in one invoice, no plan needed. */
 exports.markMyCaseNoPlanNeeded = functions.https.onCall(async (data, context) => {
   const email = await requireEditor(context);
@@ -918,6 +1015,7 @@ exports.setupMyCaseCase = functions.https.onCall(async (data, context) => {
       caseId,
       roles: (data && data.roles) || {},
       plans: (data && data.plans) || [],
+      services: (data && data.services) || {},
       by: email,
     });
   } catch (err) {
@@ -930,16 +1028,21 @@ exports.setupMyCaseCase = functions.https.onCall(async (data, context) => {
  * amount of any extra installment plan); the payment history is rebuilt from MyCase.
  * Refuses to run anywhere but the "mycase-rebuild" database. */
 exports.retagMyCaseClient = functions.https.onCall(async (data, context) => {
-  const email = await requireEditor(context);
+  let email = await requireEditor(context);
   const caseId = String((data && data.caseId) || "");
   if (!/^\d+$/.test(caseId)) {
     throw new functions.https.HttpsError("invalid-argument", "caseId required.");
   }
+  // Re-tagging a client that is already tagged ("Fix invoices & plans" on the profile)
+  // rewrites its plans and payment history: admins only.
+  const caseDoc = (await appDb().collection("mycaseCases").doc(caseId).get()).data() || {};
+  if (!caseDoc.needsTagging) email = await requireAdmin(context);
   try {
     return await retagCase(appDb(), {
       caseId,
       roles: (data && data.roles) || {},
       plans: (data && data.plans) || [],
+      services: (data && data.services) || {},
       by: email,
     });
   } catch (err) {

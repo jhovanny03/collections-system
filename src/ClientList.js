@@ -1,18 +1,17 @@
 // src/ClientList.js
-// Clients: find anyone fast and see where they stand. Numbers come from the same
-// calculation as the client profile and Reports (src/billing/portfolio.js).
-import React, { useMemo, useState } from "react";
+// Clients as a work queue: pick a list on the left and go down it; the selected client's
+// money, last 12 months, history and a quick call log open on the right
+// (src/Clients/ClientPanel.jsx). Numbers come from the prepared rows (src/billing/book.js).
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, LinearProgress,
-  MenuItem, Snackbar, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow,
-  TableSortLabel, TextField, Tooltip, Typography, Link as MuiLink, Card,
+  Alert, Box, Button, Card, Chip, Dialog, DialogActions, DialogContent, DialogTitle, InputAdornment, LinearProgress,
+  MenuItem, Snackbar, Stack, Tab, Tabs, TextField, Typography,
 } from "@mui/material";
+import { alpha, useTheme } from "@mui/material/styles";
 import SearchRounded from "@mui/icons-material/SearchRounded";
-import EditRounded from "@mui/icons-material/EditRounded";
-import DeleteOutlineRounded from "@mui/icons-material/DeleteOutlineRounded";
-import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import DownloadRounded from "@mui/icons-material/DownloadRounded";
-import { Link as RouterLink } from "react-router-dom";
+import TuneRounded from "@mui/icons-material/TuneRounded";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import { doc, deleteDoc, getDoc } from "firebase/firestore";
 import db from "./firebase";
 import EditClient from "./EditClient.jsx";
@@ -20,39 +19,32 @@ import { useAuth } from "./auth/useAuth";
 import { useBook } from "./data/BookProvider";
 import { money } from "./billing/portfolio";
 import { PageHeader } from "./ui/kit";
-import { ago, callLink, displayPhone } from "./billing/contact";
-import PhoneRounded from "@mui/icons-material/PhoneRounded";
-
-/** "A(11-26) • SPOUSE I-360+AOS • QUE" from a long MyCase case title. */
-function compactCaseTag(title, name) {
-  const raw = (title || "").trim();
-  if (!raw) return "";
-  const prefix = (raw.match(/^[A-Z]\s*\(\d{2}-\d{2}\)/i) || [""])[0].replace(/\s+/g, "");
-  let detail = ((raw.match(/\(([^)]+)\)/g) || []).map((m) => m.slice(1, -1)).find((m) => !/^\d{2}-\d{2}$/.test(m)) || "").replace(/\s*\+\s*/g, "+").trim();
-  if (name) detail = detail.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), "").trim();
-  return [prefix, detail].filter(Boolean).join(" • ") || raw.slice(0, 40);
-}
+import { callLink } from "./billing/contact";
+import ClientPanel, { initials } from "./Clients/ClientPanel";
 
 const VIEWS = [
-  { key: "all", label: "All", test: () => true },
   // Same rule as Home and Reports: active plans only (paused clients have their own view).
   { key: "pastdue", label: "Past due", test: (r) => r.amountDue > 0 && r.status === "active" && r.inPlan },
-  { key: "ended", label: "Plan ended, still owes", test: (r) => r.planEnded && r.status === "active" && r.inPlan },
-  { key: "current", label: "Current", test: (r) => r.inPlan && r.amountDue <= 0 && r.balance > 0 && r.status === "active" },
-  { key: "nocontact", label: "No contact in 30+ days", test: (r) => r.needsContact },
+  { key: "ended", label: "Plan ended", test: (r) => r.planEnded && r.status === "active" && r.inPlan },
+  { key: "nocontact", label: "No contact 30d+", test: (r) => r.needsContact },
   { key: "waiting", label: "Waiting for a plan", test: (r) => r.awaitingPlan && r.status !== "closed" },
+  { key: "current", label: "Current", test: (r) => r.inPlan && r.amountDue <= 0 && r.balance > 0 && r.status === "active" },
+  { key: "all", label: "All", test: () => true },
   { key: "paused", label: "Paused", test: (r) => r.status === "paused" },
   { key: "hold", label: "On hold", test: (r) => r.onHold },
   { key: "paid", label: "Paid in full", test: (r) => r.paidInFull },
   { key: "closed", label: "Closed", test: (r) => r.status === "closed" },
 ];
+const contactTime = (r) => (r.lastContact?.at ? new Date(r.lastContact.at).getTime() : 0);
 const SORTS = {
-  name: (a, b) => a.name.localeCompare(b.name),
-  amountDue: (a, b) => a.amountDue - b.amountDue,
-  balance: (a, b) => a.balance - b.balance,
-  missedMonths: (a, b) => a.missedMonths - b.missedMonths,
-  lastPayment: (a, b) => String(a.lastPayment?.date || "").localeCompare(String(b.lastPayment?.date || "")),
+  owed: { label: "Owed now", fn: (a, b) => b.amountDue - a.amountDue || a.name.localeCompare(b.name) },
+  behind: { label: "Months behind", fn: (a, b) => b.missedMonths - a.missedMonths || b.amountDue - a.amountDue },
+  contact: { label: "Longest since contact", fn: (a, b) => contactTime(a) - contactTime(b) },
+  balance: { label: "Balance left", fn: (a, b) => b.balance - a.balance },
+  lastPayment: { label: "Oldest last payment", fn: (a, b) => String(a.lastPayment?.date || "").localeCompare(String(b.lastPayment?.date || "")) },
+  name: { label: "Name", fn: (a, b) => a.name.localeCompare(b.name) },
 };
+const PAGE = 100;
 
 function statusChip(r) {
   if (r.status === "closed") return <Chip size="small" label="Closed" />;
@@ -63,55 +55,125 @@ function statusChip(r) {
   if (r.inPlan) return <Chip size="small" label="Current" color="success" />;
   return <Chip size="small" label="No plan" variant="outlined" />;
 }
+function statusDot(r) {
+  if (r.status === "closed") return ["Closed", "text.disabled"];
+  if (r.status === "paused") return ["Paused", "warning.main"];
+  if (r.awaitingPlan) return ["Waiting for plan", "info.main"];
+  if (r.paidInFull) return ["Paid in full", "success.main"];
+  if (r.amountDue > 0) return [r.planEnded ? "Plan ended" : `${r.missedMonths} mo behind`, r.missedMonths >= 3 || r.planEnded ? "error.main" : "secondary.main"];
+  if (r.inPlan) return ["Current", "success.main"];
+  return ["No plan", "text.disabled"];
+}
+const daysSince = (d) => (d ? Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 864e5)) : null);
 
 export default function ClientList() {
+  const theme = useTheme();
   const { isEditorOrHigher, canManageUsers } = useAuth();
-  // Prepared rows (src/data/BookProvider.jsx); the full record is read only to edit it.
+  const editor = isEditorOrHigher();
+  const admin = canManageUsers();
+  // Prepared rows (src/data/BookProvider.jsx); the full record is read for the selected client.
   const { rows, ready } = useBook();
   const loading = !ready;
-  const openEditor = async (id) => {
-    const s = await getDoc(doc(db, "clients", id));
-    if (s.exists()) setEditing({ id: s.id, ...s.data() });
-  };
+  const [params, setParams] = useSearchParams();
 
-  const [view, setView] = useState("all");
+  const [view, setView] = useState(params.get("view") || "pastdue");
   const [search, setSearch] = useState("");
   const [caseType, setCaseType] = useState("Any");
   const [source, setSource] = useState("Any");
-  const [sort, setSort] = useState({ by: "name", dir: "asc" });
-  const [page, setPage] = useState(0);
-  const [perPage, setPerPage] = useState(25);
+  const [sort, setSort] = useState("owed");
+  const [showFilters, setShowFilters] = useState(false);
+  const [shown, setShown] = useState(PAGE);
+  const [selectedId, setSelectedId] = useState(params.get("id") || null);
+  const [loggedNow, setLoggedNow] = useState({});
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [toast, setToast] = useState(null);
+  const listRef = useRef(null);
 
   const caseTypes = useMemo(() => ["Any", ...[...new Set(rows.map((r) => r.caseType).filter((t) => t && t !== "—"))].sort()], [rows]);
   const counts = useMemo(() => Object.fromEntries(VIEWS.map((v) => [v.key, rows.filter(v.test).length])), [rows]);
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const test = VIEWS.find((v) => v.key === view).test;
+    const digits = q.replace(/\D/g, "");
+    const test = (VIEWS.find((v) => v.key === view) || VIEWS[0]).test;
     const out = rows.filter(
       (r) =>
-        test(r) &&
+        // A search looks through every client, whatever list is open.
+        (q ? true : test(r)) &&
         (caseType === "Any" || r.caseType === caseType) &&
         (source === "Any" || r.source === source) &&
-        (!q || r.name.toLowerCase().includes(q) || r.caseTitle.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
+        (!q || r.name.toLowerCase().includes(q) || r.caseTitle.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) ||
+          (digits.length >= 4 && (r.phones || []).some((p) => String(p).replace(/\D/g, "").includes(digits))))
     );
-    out.sort((a, b) => (sort.dir === "asc" ? 1 : -1) * SORTS[sort.by](a, b));
+    out.sort(SORTS[sort].fn);
     return out;
   }, [rows, view, search, caseType, source, sort]);
 
-  const setSortBy = (by) => setSort((s) => ({ by, dir: s.by === by && s.dir === "desc" ? "asc" : by === "name" ? "asc" : "desc" }));
-  const reset = (fn) => (v) => {
-    fn(v);
-    setPage(0);
+  // Keep a selection inside the list; remember view + client in the address (Back works).
+  const selected = list.find((r) => r.id === selectedId) || null;
+  useEffect(() => {
+    if (!loading && list.length && !list.some((r) => r.id === selectedId)) setSelectedId(list[0].id);
+  }, [list, selectedId, loading]);
+  useEffect(() => {
+    const next = new URLSearchParams();
+    next.set("view", view);
+    if (selectedId) next.set("id", selectedId);
+    setParams(next, { replace: true });
+  }, [view, selectedId, setParams]);
+
+  const index = selected ? list.indexOf(selected) : -1;
+  const move = (step) => {
+    if (!list.length) return;
+    const i = Math.max(0, Math.min(list.length - 1, (index < 0 ? 0 : index) + step));
+    if (i >= shown) setShown((s) => s + PAGE);
+    setSelectedId(list[i].id);
+  };
+  // ↑/↓ (or J/K) move through the list, C calls the selected client. Ignored while typing.
+  useEffect(() => {
+    const onKey = (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.closest?.("[role=dialog],[role=listbox],[role=menu]"))) return;
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); move(1); }
+      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); move(-1); }
+      else if ((e.key === "c" || e.key === "C") && selected?.phones?.[0]) window.location.href = callLink(selected.phones[0]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  useEffect(() => {
+    const el = listRef.current?.querySelector(`[data-id="${selectedId}"]`);
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
+
+  const pickView = (v) => {
+    setView(v);
+    setShown(PAGE);
+    setSelectedId(null);
+    setSort(v === "nocontact" ? "contact" : v === "all" || v === "paid" || v === "closed" || v === "waiting" ? "name" : "owed");
+  };
+
+  const openEditor = async (id) => {
+    const s = await getDoc(doc(db, "clients", id));
+    if (s.exists()) setEditing({ id: s.id, ...s.data() });
+  };
+  const confirmDelete = async () => {
+    try {
+      await deleteDoc(doc(db, "clients", deleting.id));
+      setToast({ type: "success", msg: `${deleting.name} deleted.` });
+      setSelectedId(null);
+    } catch (e) {
+      setToast({ type: "error", msg: e.message || "Could not delete." });
+    } finally {
+      setDeleting(null);
+    }
   };
 
   const exportCsv = () => {
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const head = ["Client", "Case title", "Case type", "Status", "Months behind", "Owed now", "Balance left", "Last payment", "Source", "MyCase link"];
-    const body = list.map((r) => [r.name, r.caseTitle, r.caseType, r.status, r.missedMonths, r.amountDue.toFixed(2), r.balance.toFixed(2), r.lastPayment?.date || "", r.source, r.myCaseLink]);
+    const head = ["Client", "Case title", "Case type", "MyCase stage", "Status", "Months behind", "Owed now", "Balance left", "Last payment", "Source", "MyCase link"];
+    const body = list.map((r) => [r.name, r.caseTitle, r.caseType, r.mycaseStage || "", r.status, r.missedMonths, r.amountDue.toFixed(2), r.balance.toFixed(2), r.lastPayment?.date || "", r.source, r.myCaseLink]);
     const url = URL.createObjectURL(new Blob([[head, ...body].map((x) => x.map(esc).join(",")).join("\n")], { type: "text/csv" }));
     const a = document.createElement("a");
     a.href = url;
@@ -120,148 +182,103 @@ export default function ClientList() {
     URL.revokeObjectURL(url);
   };
 
-  const confirmDelete = async () => {
-    try {
-      await deleteDoc(doc(db, "clients", deleting.id));
-      setToast({ type: "success", msg: `${deleting.name} deleted.` });
-    } catch (e) {
-      setToast({ type: "error", msg: e.message || "Could not delete." });
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  const head = (by, label, align) => (
-    <TableCell align={align} sortDirection={sort.by === by ? sort.dir : false}>
-      <TableSortLabel active={sort.by === by} direction={sort.by === by ? sort.dir : "asc"} onClick={() => setSortBy(by)}>
-        {label}
-      </TableSortLabel>
-    </TableCell>
-  );
+  const filtersOn = caseType !== "Any" || source !== "Any";
 
   return (
     <Box>
       <PageHeader
         title="Clients"
-        subtitle="Search anyone, or pick a view to see who is behind, waiting for a plan or paid in full."
-        actions={<Button startIcon={<DownloadRounded />} onClick={exportCsv} disabled={!list.length}>Download {list.length.toLocaleString()} (CSV)</Button>}
+        subtitle="Pick a list and work it top to bottom: the client's money, last 12 months and history open on the right."
+        actions={
+          <>
+            <Button startIcon={<DownloadRounded />} onClick={exportCsv} disabled={!list.length}>CSV ({list.length.toLocaleString()})</Button>
+            {editor && <Button variant="contained" component={RouterLink} to="/create-client">New client</Button>}
+          </>
+        }
       />
 
-      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
-        {VIEWS.map((v) => (
-          <Chip
-            key={v.key}
-            label={`${v.label} · ${counts[v.key]?.toLocaleString() ?? 0}`}
-            onClick={() => reset(setView)(v.key)}
-            color={view === v.key ? "primary" : "default"}
-            variant={view === v.key ? "filled" : "outlined"}
-          />
-        ))}
-      </Stack>
-
-      <Card>
-        <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ p: 2 }}>
-          <TextField
-            placeholder="Search by name or case title"
-            value={search}
-            onChange={(e) => reset(setSearch)(e.target.value)}
-            sx={{ flex: 1, minWidth: 220 }}
-            InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> }}
-          />
-          <TextField select label="Case type" value={caseType} onChange={(e) => reset(setCaseType)(e.target.value)} sx={{ minWidth: 200 }}>
-            {caseTypes.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
-          </TextField>
-          <TextField select label="Source" value={source} onChange={(e) => reset(setSource)(e.target.value)} sx={{ minWidth: 200 }}>
-            {["Any", "MyCase", "Rebuilt from MyCase", "MyCase, invoices to tag", "Typed by hand"].map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
-          </TextField>
-        </Stack>
-        {loading && <LinearProgress />}
-        <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                {head("name", "Client")}
-                <TableCell>Case type</TableCell>
-                <TableCell>Status</TableCell>
-                {head("amountDue", "Owed now", "right")}
-                {head("balance", "Balance left", "right")}
-                {head("lastPayment", "Last payment")}
-                <TableCell>Last contact</TableCell>
-                <TableCell>Promise</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {list.slice(page * perPage, page * perPage + perPage).map((r) => (
-                <TableRow key={r.id} hover>
-                  <TableCell sx={{ maxWidth: 320 }}>
-                    <MuiLink component={RouterLink} to={`/client/${r.id}`} fontWeight={700} underline="hover">{r.name}</MuiLink>
-                    <Typography variant="caption" color="text.secondary" display="block" noWrap title={r.caseTitle}>
-                      {compactCaseTag(r.caseTitle, r.name)}
+      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "400px minmax(0, 1fr)" }, alignItems: "start" }}>
+        {/* The list */}
+        <Card sx={{ position: { lg: "sticky" }, top: { lg: 80 }, display: "flex", flexDirection: "column", maxHeight: { lg: "calc(100vh - 100px)" }, overflow: "hidden" }}>
+          <Tabs value={view} onChange={(e, v) => pickView(v)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile sx={{ borderBottom: 1, borderColor: "divider", minHeight: 46, px: 0.5 }}>
+            {VIEWS.map((v) => (
+              <Tab key={v.key} value={v.key} sx={{ textTransform: "none", fontWeight: 800, minHeight: 46, px: 1.25, minWidth: 0 }}
+                label={<Stack direction="row" spacing={0.75} alignItems="center"><span>{v.label}</span><Chip size="small" label={(counts[v.key] || 0).toLocaleString()} color={view === v.key ? "primary" : "default"} sx={{ height: 19, fontSize: 11, fontWeight: 800 }} /></Stack>} />
+            ))}
+          </Tabs>
+          <Stack direction="row" spacing={1} sx={{ p: 1.25, borderBottom: 1, borderColor: "divider" }}>
+            <TextField size="small" placeholder="Search name, case or phone" value={search} onChange={(e) => { setSearch(e.target.value); setShown(PAGE); }} sx={{ flex: 1 }}
+              InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> }} />
+            <TextField size="small" select value={sort} onChange={(e) => setSort(e.target.value)} sx={{ width: 150 }} SelectProps={{ renderValue: (v) => `Sort: ${SORTS[v].label}` }}>
+              {Object.entries(SORTS).map(([k, s]) => <MenuItem key={k} value={k}>{s.label}</MenuItem>)}
+            </TextField>
+            <Button size="small" variant={filtersOn ? "contained" : "outlined"} onClick={() => setShowFilters((v) => !v)} sx={{ minWidth: 40, px: 1 }} title="Case type and source"><TuneRounded fontSize="small" /></Button>
+          </Stack>
+          {showFilters && (
+            <Stack direction="row" spacing={1} sx={{ p: 1.25, pt: 0, borderBottom: 1, borderColor: "divider" }}>
+              <TextField size="small" select label="Case type" value={caseType} onChange={(e) => { setCaseType(e.target.value); setShown(PAGE); }} sx={{ flex: 1 }}>
+                {caseTypes.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+              </TextField>
+              <TextField size="small" select label="Source" value={source} onChange={(e) => { setSource(e.target.value); setShown(PAGE); }} sx={{ flex: 1 }}>
+                {["Any", "MyCase", "Rebuilt from MyCase", "MyCase, invoices to tag", "Typed by hand"].map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+              </TextField>
+            </Stack>
+          )}
+          {loading && <LinearProgress />}
+          <Box ref={listRef} sx={{ overflowY: "auto", flex: 1, maxHeight: { xs: 420, lg: "none" } }}>
+            {list.slice(0, shown).map((r) => {
+              const on = r.id === selectedId;
+              const [label, color] = statusDot(r);
+              const contactAt = loggedNow[r.id] || r.lastContact?.at;
+              const days = daysSince(contactAt);
+              return (
+                <Box key={r.id} data-id={r.id} onClick={() => setSelectedId(r.id)}
+                  sx={{
+                    display: "grid", gridTemplateColumns: "34px minmax(0,1fr) auto", gap: 1.25, alignItems: "center", px: 1.75, py: 1.25, cursor: "pointer", position: "relative",
+                    borderBottom: 1, borderColor: "divider", bgcolor: on ? alpha(theme.palette.primary.main, 0.08) : "transparent",
+                    "&:hover": { bgcolor: on ? alpha(theme.palette.primary.main, 0.1) : alpha(theme.palette.primary.main, 0.03) },
+                    "&::before": on ? { content: '""', position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 3, bgcolor: "primary.main" } : undefined,
+                  }}>
+                  <Box sx={{ width: 34, height: 34, borderRadius: "50%", display: "grid", placeItems: "center", fontWeight: 800, fontSize: 12, bgcolor: alpha(theme.palette.primary.main, 0.1), color: "primary.main" }}>{initials(r.name)}</Box>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={800} noWrap>{r.name}</Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap component="div">
+                      {r.caseType && r.caseType !== "—" ? `${r.caseType} · ` : ""}
+                      <Box component="span" sx={{ color, fontWeight: 800 }}>● {label}</Box>
                     </Typography>
-                  </TableCell>
-                  <TableCell>{r.caseType}</TableCell>
-                  <TableCell>{statusChip(r)}</TableCell>
-                  <TableCell align="right">
-                    {r.amountDue > 0 ? <Typography fontWeight={800} color="secondary.main" component="span">{money(r.amountDue)}</Typography> : "—"}
-                  </TableCell>
-                  <TableCell align="right">{r.balance > 0 ? money(r.balance) : "—"}</TableCell>
-                  <TableCell>
-                    {r.lastPayment ? (
-                      <>
-                        {money(r.lastPayment.amount)}
-                        <Typography variant="caption" color="text.secondary" display="block">{r.lastPayment.date}</Typography>
-                      </>
-                    ) : "—"}
-                  </TableCell>
-                  <TableCell>
-                    {r.lastContact ? (
-                      <Typography variant="body2" color={r.needsContact ? "error.main" : "text.primary"}>{ago(r.lastContact.at)}</Typography>
-                    ) : (
-                      <Typography variant="body2" color={r.needsContact ? "error.main" : "text.disabled"}>Never</Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>{r.promise?.date ? <Chip size="small" variant="outlined" label={`${money(r.promise.amount)} on ${String(r.promise.date).slice(0, 10)}`} /> : "—"}</TableCell>
-                  <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                    {r.phones?.[0] && (
-                      <Tooltip title={`Call ${displayPhone(r.phones[0])} with RingCentral`}>
-                        <IconButton size="small" color="primary" href={callLink(r.phones[0])}><PhoneRounded fontSize="small" /></IconButton>
-                      </Tooltip>
-                    )}
-                    {r.myCaseLink && (
-                      <Tooltip title="Open in MyCase">
-                        <IconButton size="small" href={r.myCaseLink} target="_blank" rel="noopener noreferrer"><OpenInNewRounded fontSize="small" /></IconButton>
-                      </Tooltip>
-                    )}
-                    {isEditorOrHigher() && (
-                      <Tooltip title="Edit name and case">
-                        <IconButton size="small" onClick={() => openEditor(r.id)}><EditRounded fontSize="small" /></IconButton>
-                      </Tooltip>
-                    )}
-                    {canManageUsers() && (
-                      <Tooltip title="Delete client (admins)">
-                        <IconButton size="small" color="error" onClick={() => setDeleting(r)}><DeleteOutlineRounded fontSize="small" /></IconButton>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!loading && list.length === 0 && (
-                <TableRow><TableCell colSpan={9} align="center" sx={{ py: 5 }}>No clients match. Try another view or clear the search.</TableCell></TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-        <TablePagination
-          component="div"
-          count={list.length}
-          page={page}
-          onPageChange={(_, p) => setPage(p)}
-          rowsPerPage={perPage}
-          onRowsPerPageChange={(e) => reset(setPerPage)(parseInt(e.target.value, 10))}
-          rowsPerPageOptions={[25, 50, 100]}
+                  </Box>
+                  <Box sx={{ textAlign: "right" }}>
+                    <Typography variant="body2" fontWeight={800} color={r.amountDue > 0 ? "secondary.main" : "success.main"}>{r.amountDue > 0 ? money(r.amountDue) : r.awaitingPlan ? "—" : "$0"}</Typography>
+                    <Typography variant="caption" color={days == null || days >= 30 ? "error.main" : "text.secondary"} fontWeight={700} noWrap component="div">
+                      {days == null ? "never contacted" : days === 0 ? "contacted today" : `${days}d since contact`}
+                    </Typography>
+                  </Box>
+                </Box>
+              );
+            })}
+            {list.length > shown && (
+              <Box sx={{ p: 1.5, textAlign: "center" }}><Button size="small" onClick={() => setShown((s) => s + PAGE)}>Show {Math.min(PAGE, list.length - shown)} more</Button></Box>
+            )}
+            {!loading && list.length === 0 && <Typography color="text.secondary" sx={{ p: 4, textAlign: "center" }}>No clients match. Try another list or clear the search.</Typography>}
+          </Box>
+          <Stack direction="row" justifyContent="space-between" sx={{ px: 1.75, py: 1, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
+            <Typography variant="caption" fontWeight={700}>{index >= 0 ? `${(index + 1).toLocaleString()} of ` : ""}{list.length.toLocaleString()} clients{search.trim() ? " · searching all clients" : ""}</Typography>
+            <Typography variant="caption" fontWeight={700} sx={{ display: { xs: "none", sm: "block" } }}>↑ ↓ move · C call</Typography>
+          </Stack>
+        </Card>
+
+        {/* The selected client */}
+        <ClientPanel
+          row={selected}
+          status={selected ? statusChip(selected) : null}
+          editor={editor}
+          admin={admin}
+          onEdit={openEditor}
+          onDelete={setDeleting}
+          onLogged={(id, at) => setLoggedNow((m) => ({ ...m, [id]: at }))}
+          notify={setToast}
         />
-      </Card>
+      </Box>
 
       {editing && <EditClient client={editing} onClose={() => setEditing(null)} onSave={() => setEditing(null)} />}
 

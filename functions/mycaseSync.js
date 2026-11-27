@@ -54,6 +54,8 @@ function toMirrorDoc(kind, r) {
       description: r.description || "", status: r.status || "",
       invoiceDate: r.invoice_date || null, dueDate: r.due_date || null,
       total: Number(r.total_amount || 0), paid: Number(r.paid_amount || 0), balance: Number(r.balance || 0),
+      // Who created the invoice in MyCase (intake / sales or billing), once the feed sends it.
+      createdBy: r.created_by || null,
     };
   }
   return {
@@ -140,7 +142,8 @@ function initialInvoiceOf(invoices, client = null) {
     const open = tagged.find((i) => cents(i.total) > cents(i.paid)) || tagged[0];
     return {
       id: open.id,
-      invoiceDate: tagged.map((i) => i.invoiceDate || "").sort()[0] || null,
+      // Date the debt from the invoice still open (e.g. a later removal-defense initial).
+      invoiceDate: open.invoiceDate || tagged.map((i) => i.invoiceDate || "").sort()[0] || null,
       total: tagged.reduce((t, i) => t + Number(i.total || 0), 0),
       paid: tagged.reduce((t, i) => t + Number(i.paid || 0), 0),
     };
@@ -160,7 +163,7 @@ function initialInvoiceOf(invoices, client = null) {
  * "potential" (a potential client's quote), or null (nothing owed / closed).
  */
 function initialFlags(caseDoc, invoices, onlyClient, tracked) {
-  const none = { initialState: null, initialDue: 0, initialTotal: 0, initialPaid: 0, initialInvoiceId: null, initialDate: null };
+  const none = { initialState: null, initialDue: 0, initialTotal: 0, initialPaid: 0, initialInvoiceId: null, initialDate: null, initialService: null, initialCreatedBy: null };
   // A case only "marked" closed (stage or name) still counts while its client is in
   // Collections; untracked ones that look closed are left out.
   if (caseDoc.status === "closed" || tracked === "multiple" || (!tracked && looksClosed(caseDoc))) return none;
@@ -170,7 +173,9 @@ function initialFlags(caseDoc, invoices, onlyClient, tracked) {
   if (due <= 0.5) return none;
   const paid = cents(inv.paid) / 100;
   const state = tracked ? "client" : isPotentialCase(caseDoc) ? "potential" : paid > 0 ? "started" : "notStarted";
-  return { initialState: state, initialDue: due, initialTotal: cents(inv.total) / 100, initialPaid: paid, initialInvoiceId: String(inv.id), initialDate: inv.invoiceDate || null };
+  // Which service the open initial invoice is for (e.g. "Removal defense"), when tagged.
+  const service = ((onlyClient && onlyClient.invoiceServices) || {})[String(inv.id)] || null;
+  return { initialState: state, initialDue: due, initialTotal: cents(inv.total) / 100, initialPaid: paid, initialInvoiceId: String(inv.id), initialDate: inv.invoiceDate || null, initialService: service && service !== "Main case" ? service : null, initialCreatedBy: inv.createdBy || null };
 }
 
 function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
@@ -180,7 +185,9 @@ function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
   const ids = trackedClients.map((c) => (typeof c === "object" ? c.id : c));
   const tracked = ids.length ? (ids.length === 1 ? ids[0] : "multiple") : null;
   const open = caseDoc.status !== "closed";
-  const autoCreate = !tracked && shouldAutoCreate(caseDoc, invoices);
+  // A case billing removed from Case Setup (terminated, not a client) stays off the list.
+  const dismissed = !!(caseDoc.setupDismissed && caseDoc.setupDismissed.at);
+  const autoCreate = !tracked && !dismissed && shouldAutoCreate(caseDoc, invoices);
   const only = trackedClients.length === 1 && typeof trackedClients[0] === "object" ? trackedClients[0] : null;
   // Paid in full already (e.g. the whole flat fee on the initial invoice): no plan needed.
   const paidCents = invoices.filter((i) => i.status !== "draft").reduce((t, i) => t + cents(i.paid), 0);
@@ -191,7 +198,7 @@ function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
     openBalance: openBalanceCents / 100,
     invoiceCount: invoices.filter((i) => i.status !== "draft").length,
     trackedClientId: tracked,
-    needsSetup: open && openBalanceCents > 0 && !tracked && !autoCreate,
+    needsSetup: open && openBalanceCents > 0 && !tracked && !autoCreate && !dismissed,
     autoCreate,
     needsPlan: open && !!(only && only.awaitingPlan) && !paidInFull,
     paidInFull,
@@ -480,6 +487,15 @@ async function runAll({ store, baseUrl, token, fetchImpl, log = console }) {
   if (store.refreshMyCaseReceived && payments.touchedCases && payments.touchedCases.size) {
     received = await store.refreshMyCaseReceived({ caseIds: [...payments.touchedCases] });
   }
+  // New invoices on existing clients go to MyCase Review right away (before any payment).
+  let newInvoices = null;
+  if (store.flagNewInvoices && touched.size) {
+    try {
+      newInvoices = await store.flagNewInvoices({ caseIds: [...touched] });
+    } catch (e) {
+      if (log.warn) log.warn("New invoices not flagged:", e.message);
+    }
+  }
   // A case closed (or reopened) in MyCase closes (or reopens) its client here.
   const closures = store.syncCaseClosures ? await store.syncCaseClosures([...touched]) : null;
   const linkIssues = store.refreshLinkIssues ? await store.refreshLinkIssues() : null;
@@ -492,7 +508,7 @@ async function runAll({ store, baseUrl, token, fetchImpl, log = console }) {
       if (log.warn) log.warn("Portfolio figures not refreshed:", e.message);
     }
   }
-  const stats = { cases: cases.rows, invoices: invoices.rows, casesRefreshed: touched.size, needsSetup: flagged, autoCreated, payments, mycaseReceived: received, closures: closures && { closed: closures.closed, reopened: closures.reopened, filed: closures.filed }, phones, linkIssues, portfolio };
+  const stats = { cases: cases.rows, invoices: invoices.rows, casesRefreshed: touched.size, needsSetup: flagged, autoCreated, payments, mycaseReceived: received, newInvoices, closures: closures && { closed: closures.closed, reopened: closures.reopened, filed: closures.filed }, phones, linkIssues, portfolio };
   if (log.info) log.info("MyCase sync", stats);
   return stats;
 }
@@ -516,6 +532,7 @@ module.exports = {
   buildIntakeClient,
   toMirrorDoc,
   defaultInvoiceRole,
+  isConsultFee,
   caseFlags,
   buildSetupClient,
   splitName,

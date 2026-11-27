@@ -15,6 +15,7 @@ import MyCaseSyncReport from "./MyCaseSyncReport";
 import ForecastReport from "./ForecastReport";
 import RiskReport from "./RiskReport";
 import PaymentAllocationReport from "./PaymentAllocationReport";
+import MonthlyBriefing from "./MonthlyBriefing";
 
 const TABS = [
   { key: "overview", label: "Overview", help: "Where the money stands: what is owed, how old it is, how collection is going, who owes the most." },
@@ -26,6 +27,7 @@ const TABS = [
   { key: "payments", label: "Payments received", help: "Every payment by day, with who recorded it (or MyCase)." },
   { key: "followups", label: "Follow-ups & promises", help: "How the monthly follow-up list is going and how many promises are kept." },
   { key: "mycase", label: "MyCase sync", help: "Whether the MyCase connection is healthy and what is waiting on a person." },
+  { key: "briefing", label: "Monthly briefing", help: "The month as one readable report: what happened, section by section, with the numbers behind it. Download it as a PDF to share." },
 ];
 // Old links (bookmarks, Home tiles) keep working.
 const ALIASES = { collections: "collected", cohorts: "overview" };
@@ -59,6 +61,7 @@ export default function ReportsPage() {
       {key === "payments" && <PaymentHistoryReport />}
       {key === "followups" && <FollowUpsReport />}
       {key === "mycase" && <MyCaseSyncReport />}
+      {key === "briefing" && <MonthlyBriefing openReport={(t) => { setParams({ tab: t }, { replace: true }); window.scrollTo({ top: 0 }); }} />}
     </Box>
   );
 }

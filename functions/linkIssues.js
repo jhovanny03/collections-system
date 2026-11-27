@@ -32,6 +32,47 @@ const caseSummary = (k, reason) => ({
   practiceArea: k.practiceArea || "", openedDate: k.openedDate || null, clientNames: k.clientNames || [], reason,
 });
 
+/**
+ * What billing needs to compare a record with a case side by side: the case's invoices
+ * (total, paid, balance), its first client's phone, and its last payment.
+ */
+async function withCaseFacts(db, summary) {
+  try {
+    const inv = (await db.collection("mycaseInvoices").where("caseId", "==", String(summary.caseId)).get()).docs
+      .map((d) => d.data()).filter((i) => i.status !== "draft");
+    const k = (await db.collection("mycaseCases").doc(String(summary.caseId)).get()).data() || {};
+    let phone = null;
+    const firstClient = (k.clientIds || [])[0];
+    if (firstClient) {
+      const cl = await db.collection("mycaseClients").doc(String(firstClient)).get();
+      phone = cl.exists ? (cl.data().phones || [])[0] || null : null;
+    }
+    return {
+      ...summary,
+      invoiceTotal: inv.reduce((t, i) => t + Number(i.total || 0), 0),
+      invoicePaid: inv.reduce((t, i) => t + Number(i.paid || 0), 0),
+      invoiceCount: inv.length,
+      openBalance: Number(k.openBalance || 0),
+      lastPaymentDate: k.lastPaymentDate || null,
+      phone,
+    };
+  } catch (e) {
+    return summary;
+  }
+}
+
+/** A Collections record's facts for the same comparison. */
+function recordFacts(c) {
+  const pays = (c.payments || []).filter((p) => Number(p.amount) > 0 && p.status !== "cancelled");
+  return {
+    invoiceTotal: Number(c.invoiceTotal || 0), initialPaymentAmount: Number(c.initialPaymentAmount || 0),
+    startDate: c.initialPaymentDate || c.firstInstallmentDate || null, createdAt: c.createdAt || null,
+    paid: pays.reduce((t, p) => t + Number(p.amount || 0), 0), payments: pays.length,
+    lastPayment: pays.map((p) => String(p.date || "").slice(0, 10)).filter(Boolean).sort().pop() || null,
+    phone: (c.mycasePhones || [])[0] || c.phone || null,
+  };
+}
+
 /** Candidate cases for one unlinked client, best first. */
 async function candidatesFor(db, client) {
   const hint = linkHint(client.myCaseLink);
@@ -57,7 +98,7 @@ async function candidatesFor(db, client) {
     const snap = await db.collection("mycaseCases").where("name", "==", title).get();
     snap.docs.forEach((d) => add(d.data(), "The case title matches this MyCase case name exactly."));
   }
-  return [...out.values()];
+  return Promise.all([...out.values()].slice(0, 5).map((k) => withCaseFacts(db, k)));
 }
 
 /**
@@ -73,20 +114,22 @@ async function refreshLinkIssues(db, clientsByCaseId) {
     issues.push({
       id: `unlinked_${c.id}`, type: "unlinked", clientId: c.id, clientName: clientName(c),
       status: c.status || "active", caseStatus: c.caseStatus || "", caseTitle: c.caseTitle || "", caseType: c.caseType || "",
-      link: c.myCaseLink || "", candidates: await candidatesFor(db, c),
+      link: c.myCaseLink || "", candidates: await candidatesFor(db, c), ...recordFacts(c),
     });
   }
   for (const [caseId, list] of clientsByCaseId) {
     if (list.length < 2) continue;
     const k = (await db.collection("mycaseCases").doc(String(caseId)).get()).data() || {};
+    const facts = await withCaseFacts(db, caseSummary({ ...k, id: caseId }, ""));
     issues.push({
-      id: `shared_${caseId}`, type: "shared", caseId: String(caseId), caseName: k.name || "", caseStatus: k.status || "",
+      id: `shared_${caseId}`, type: "shared", caseId: String(caseId), caseName: k.name || "", caseStatus: k.status || "", case: facts,
       clients: list.map((c) => ({
         clientId: c.id, clientName: clientName(c), status: c.status || "active", caseStatus: c.caseStatus || "",
         caseTitle: c.caseTitle || "", invoiceTotal: Number(c.invoiceTotal || 0), payments: (c.payments || []).length,
         paid: (c.payments || []).reduce((s, p) => s + Number(p.amount || 0), 0),
         lastPayment: (c.payments || []).map((p) => p.date).filter(Boolean).sort().pop() || null,
-        createdAt: c.createdAt || null,
+        createdAt: c.createdAt || null, caseType: c.caseType || "", initialPaymentAmount: Number(c.initialPaymentAmount || 0),
+        startDate: c.initialPaymentDate || c.firstInstallmentDate || null, source: c.invoiceRoles && Object.keys(c.invoiceRoles).length ? "rebuilt" : "typed",
       })),
     });
   }

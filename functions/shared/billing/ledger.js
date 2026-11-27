@@ -253,10 +253,15 @@ function amountFor(c, schedule, date) {
 
 /** Installment money (no initial payments) received between two dates, all plans. */
  function installmentPaidBetween(client, from, to) {
-  let s = 0;
-  for (const v of _plans.planViews.call(void 0, client)) s += installmentPayments(v, to).filter((p) => p.date >= from).reduce((t, p) => t + p.amount, 0);
-  return s;
+  return installmentPaymentsBetween(client, from, to).reduce((t, p) => t + p.amount, 0);
 } exports.installmentPaidBetween = installmentPaidBetween;
+
+/** The installment parts of a client's payments (all plans) made between `from` and `to`. */
+ function installmentPaymentsBetween(client, from, to) {
+  const out = [];
+  for (const v of _plans.planViews.call(void 0, client)) for (const p of installmentPayments(v, to)) if (p.date >= from) out.push(p);
+  return out;
+} exports.installmentPaymentsBetween = installmentPaymentsBetween;
 
 /** Accountant aging buckets, by days since the 1st of the installment's month. */
  const AGING_BUCKETS = [

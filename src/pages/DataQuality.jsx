@@ -6,6 +6,8 @@
 //  2. Plan ended, still owes, by reason (no payment in 6+ months / on the $500 standard /
 //     plan ran out while paying).
 //  3. The queues that feed bad numbers (invoices to tag, new cases, links, MyCase review).
+//  4. Termination & closing: possible terminations, on hold for payment, and clients that
+//     should already be closed (src/pages/dataQuality/CloseCheckTab.jsx).
 // Rows come from the prepared figures (src/data/BookProvider.jsx); "Update figures" redoes them.
 import React, { useMemo, useState } from "react";
 import { Alert, Box, Button, Chip, LinearProgress, Link as MuiLink, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tab, Tabs, Typography } from "@mui/material";
@@ -19,6 +21,7 @@ import { getActor } from "../auth/actor";
 import { money, monthLabel } from "../billing/portfolio";
 import { confirmedEntry, STANDARD_MONTHLY } from "../billing/dataQuality";
 import { PageHeader, Section, StatCard, Tiles, Empty } from "../ui/kit";
+import CloseCheckTab from "./dataQuality/CloseCheckTab";
 
 const REASONS = {
   quiet: { label: "No payment in 6+ months", tone: "error", todo: "Review for write-off, outside collections or closing the case." },
@@ -59,6 +62,10 @@ export default function DataQuality() {
     return m;
   }, [ended]);
   const open = steady.filter((r) => !done[r.id]);
+  // Additional services with their initial invoice tagged but no monthly plan yet.
+  const unpaired = useMemo(() => rows.filter((r) => r.servicesMissingPlan && r.status !== "closed"), [rows]);
+  const closing = useMemo(() => rows.filter((r) => r.closeCheck && !r.closeCheck.dismissed), [rows]);
+  const closingMain = closing.filter((r) => r.closeCheck.group === "termination" || r.closeCheck.group === "close");
   const less = steady.filter((r) => r.steadyPay.amount < r.steadyPay.expected);
   const more = steady.filter((r) => r.steadyPay.amount > r.steadyPay.expected);
   const shown = side === "less" ? less : more;
@@ -121,12 +128,16 @@ export default function DataQuality() {
       <Tiles min={200} sx={{ mb: 2.5 }}>
         <StatCard label="Monthly amount to confirm" value={open.length} sub={`${steady.filter((r) => r.amountDue > 0).length} of them show as owing`} tone={open.length ? "warn" : "good"} onClick={() => setTab("amounts")} />
         <StatCard label="Plan ended, still owes" value={ended.length} sub={money(ended.reduce((s, r) => s + r.amountDue, 0))} tone="bad" onClick={() => setTab("ended")} />
+        <StatCard label="Services without a plan" value={unpaired.length} sub="initial tagged, monthly plan missing" tone={unpaired.length ? "warn" : "good"} onClick={() => setTab("services")} />
+        <StatCard label="Termination & closing" value={closingMain.length} sub={`${closing.filter((r) => r.closeCheck.group === "termination").length} possible terminations · ${closing.filter((r) => r.closeCheck.group === "close").length} to close`} tone={closingMain.length ? "bad" : "good"} onClick={() => setTab("closing")} />
         <StatCard label="Queues to clear" value={queues.reduce((s, q) => s + (q.n || 0), 0).toLocaleString()} sub="tags, new cases, links, review" onClick={() => setTab("queues")} />
       </Tiles>
 
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab value="amounts" label={`Monthly amount to confirm (${open.length})`} />
         <Tab value="ended" label={`Plan ended, still owes (${ended.length})`} />
+        <Tab value="services" label={`Services without a plan (${unpaired.length})`} />
+        <Tab value="closing" label={`Termination & closing (${closing.length})`} />
         <Tab value="queues" label="Queues" />
       </Tabs>
 
@@ -245,6 +256,43 @@ export default function DataQuality() {
           )}
         </Section>
       )}
+
+      {tab === "services" && (
+        <Section
+          title="Additional services missing their monthly plan"
+          subtitle="An additional service (removal defense, derivative...) has two invoices in MyCase: its initial payment and a monthly-plan invoice. These clients have the initial tagged but no plan for it yet. When billing creates the monthly invoice, it shows on MyCase Review: tag it Monthly plan with the same service."
+          pad={false}
+        >
+          {unpaired.length === 0 ? (
+            <Empty title="Every additional service has its plan" />
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Client</TableCell>
+                    <TableCell>Service</TableCell>
+                    <TableCell>Case type</TableCell>
+                    <TableCell align="right">Owed now (main plan)</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {unpaired.map((r) => (
+                    <TableRow key={r.id} hover>
+                      <TableCell><MuiLink component={RouterLink} to={`/client/${r.id}`} fontWeight={700} underline="hover">{r.name}</MuiLink></TableCell>
+                      <TableCell>{r.servicesMissingPlan.map((x) => <Chip key={x} size="small" color="warning" variant="outlined" label={x} sx={{ mr: 0.5 }} />)}</TableCell>
+                      <TableCell>{r.caseType}</TableCell>
+                      <TableCell align="right">{r.amountDue > 0 ? money(r.amountDue) : "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Section>
+      )}
+
+      {tab === "closing" && <CloseCheckTab rows={rows} editor={editor} />}
 
       {tab === "queues" && (
         <Tiles min={230}>

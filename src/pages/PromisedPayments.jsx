@@ -4,29 +4,35 @@
 //    since Nov 19, 2026 is also kept in paymentPromises (checked kept/broken nightly).
 //  - A promise counts as kept when the client paid at least the amount between the day it
 //    was made and 3 days after the promised date (same rule as the nightly check).
-import React, { useEffect, useMemo, useState } from "react";
+// Layout ("calendar queue"): the month calendar and the numbers on top; below, the list
+// (Coming up / Missed / Kept, or the day picked on the calendar) and the selected promise
+// with what to do after the call (promises/PromisePanel.jsx). History keeps its table.
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Box, Button, Card, Chip, InputAdornment, LinearProgress, Stack, Tab, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, Tabs, TextField, Tooltip, Typography, Link as MuiLink,
+  Alert, Box, Button, Card, Chip, InputAdornment, LinearProgress, Snackbar, Stack, Tab, Table, TableBody, TableCell, TableContainer, TableHead,
+  TableRow, Tabs, TextField, Typography, Link as MuiLink,
 } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
 import SearchRounded from "@mui/icons-material/SearchRounded";
-import PhoneInTalkRounded from "@mui/icons-material/PhoneInTalkRounded";
-import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
-import FullCalendar from "@fullcalendar/react";
-import dayGridPlugin from "@fullcalendar/daygrid";
-import { Link as RouterLink, useNavigate } from "react-router-dom";
+import HistoryRounded from "@mui/icons-material/HistoryRounded";
+import { Link as RouterLink } from "react-router-dom";
 import { collection, getDocs } from "firebase/firestore";
 import db from "../firebase";
+import { useAuth } from "../auth/useAuth";
 import { useBook } from "../data/BookProvider";
 import { money, clientName } from "../billing/portfolio";
+import { callLink } from "../billing/contact";
 import { parseDate } from "../utils/dates";
-import { PageHeader, StatCard, Tiles, Empty } from "../ui/kit";
+import { FONT_HEADING } from "../theme/brand";
+import { PageHeader, Empty } from "../ui/kit";
+import { Ring } from "../Dashboard/homeCharts";
+import PromiseCalendar, { dotColor, ymd } from "./promises/PromiseCalendar";
+import PromisePanel, { GRACE_DAYS, STATUS } from "./promises/PromisePanel";
+import { promiseStatus } from "./promises/promiseStatus";
 
-const GRACE_DAYS = 3;
 const DAY = 864e5;
+const keyOf = (p) => `${p.id}|${ymd(p.date)}`;
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 /** "Today", "Tomorrow", "in 4 days", "2 days ago". */
 function relative(date, today) {
@@ -37,45 +43,48 @@ function relative(date, today) {
   return days > 0 ? `in ${days} days` : `${-days} days ago`;
 }
 
-const STATUS = {
-  today: { label: "Due today", color: "warning" },
-  grace: { label: "Due, waiting", color: "warning" },
-  upcoming: { label: "Upcoming", color: "info" },
-  missed: { label: "Missed", color: "error" },
-  kept: { label: "Kept", color: "success" },
-};
+/** A history record's status in the same words (open ones by their date). */
+function historyStatus(h, today) {
+  if (h.status === "kept") return "kept";
+  if (h.status === "broken") return "missed";
+  const d0 = startOfDay(h.date).getTime();
+  if (d0 === today.getTime()) return "today";
+  if (d0 > today.getTime()) return "upcoming";
+  return today.getTime() - d0 <= GRACE_DAYS * DAY ? "grace" : "missed";
+}
 
-/** Status of a current promise, from the client's payments. */
-function promiseStatus(promise, payments, today) {
-  const due = parseDate(promise.date);
-  if (!due) return { key: "upcoming", paid: 0 };
-  const made = parseDate(promise.createdAt) || new Date(due.getTime() - 30 * DAY);
-  const graceEnd = new Date(startOfDay(due).getTime() + (GRACE_DAYS + 1) * DAY - 1);
-  const paid = (payments || []).reduce((s, p) => {
-    const d = parseDate(p.date);
-    return d && Number(p.amount) > 0 && d >= startOfDay(made) && d <= graceEnd ? s + Number(p.amount) : s;
-  }, 0);
-  const amount = Number(promise.amount || 0);
-  if (amount > 0 && paid >= amount - 0.005) return { key: "kept", paid };
-  const d0 = startOfDay(due).getTime();
-  if (d0 === today.getTime()) return { key: "today", paid };
-  if (d0 > today.getTime()) return { key: "upcoming", paid };
-  if (today.getTime() <= graceEnd.getTime()) return { key: "grace", paid };
-  return { key: "missed", paid };
+function Num({ label, value, sub, color, onClick }) {
+  return (
+    <Card component={onClick ? "button" : "div"} type={onClick ? "button" : undefined} onClick={onClick}
+      sx={{ p: 2, textAlign: "left", font: "inherit", display: "flex", flexDirection: "column", justifyContent: "flex-start", alignItems: "flex-start", cursor: onClick ? "pointer" : "default", color: "inherit", transition: "transform .15s", "&:hover": onClick ? { transform: "translateY(-2px)" } : undefined }}>
+      <Typography variant="caption" fontWeight={800} color="text.secondary">{label}</Typography>
+      <Typography sx={{ font: `700 26px ${FONT_HEADING}`, color, lineHeight: 1.2 }}>{value}</Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={700}>{sub}</Typography>
+    </Card>
+  );
 }
 
 export default function PromisedPayments() {
   const theme = useTheme();
-  const navigate = useNavigate();
+  const { isEditorOrHigher } = useAuth();
+  const editor = isEditorOrHigher();
   // Prepared rows: each client with a promise carries the payments around it (promisePayments).
   const { rows, ready } = useBook();
   const loading = !ready;
-  const clients = rows;
-  const [tab, setTab] = useState("upcoming");
-  const [search, setSearch] = useState("");
+  const [view, setView] = useState("queue"); // queue | history
+  const [tab, setTab] = useState("upcoming"); // upcoming | missed | kept
   const [missedWhen, setMissedWhen] = useState("month"); // month | older | all
+  const [search, setSearch] = useState("");
+  const [day, setDay] = useState("");
+  const [month, setMonth] = useState(() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), 1); });
   const [history, setHistory] = useState(null);
+  const [overrides, setOverrides] = useState(() => new Map()); // promises changed here, until the figures refresh
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [toast, setToast] = useState(null);
+  const listRef = useRef(null);
+  const queueRef = useRef(null);
   const today = useMemo(() => startOfDay(new Date()), []);
+  const todayKey = ymd(today);
 
   useEffect(() => {
     getDocs(collection(db, "paymentPromises"))
@@ -83,251 +92,197 @@ export default function PromisedPayments() {
       .catch(() => setHistory([]));
   }, []);
 
-  const owedById = useMemo(() => new Map(rows.map((r) => [r.id, r.amountDue])), [rows]);
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const base = (c) => ({
+    id: c.id, name: clientName(c), caseType: c.caseType && c.caseType !== "—" ? c.caseType : "", owed: c.amountDue || 0,
+    myCaseLink: c.myCaseLink || "", phone: (c.phones || c.mycasePhones || [])[0] || "",
+  });
 
+  // Current promises (one per client).
   const promises = useMemo(() => {
     const out = [];
-    for (const c of clients) {
-      const pr = c.paymentPromise;
+    for (const c of rows) {
+      const pr = overrides.has(c.id) ? overrides.get(c.id) : c.paymentPromise;
       const date = parseDate(pr?.date);
       if (!pr || !date || !Number(pr.amount)) continue;
       if (String(c.status || "").toLowerCase() === "closed") continue;
       const st = promiseStatus(pr, c.promisePayments || c.payments, today);
       out.push({
-        id: c.id,
-        name: clientName(c),
-        caseType: c.caseType || "",
-        date,
-        amount: Number(pr.amount),
-        notes: pr.notes || "",
-        by: pr.createdBy || "",
-        status: st.key,
-        paid: st.paid,
-        owed: owedById.get(c.id) || 0,
-        myCaseLink: c.myCaseLink || "",
+        ...base(c), date: startOfDay(date), amount: Number(pr.amount), notes: pr.notes || "", by: pr.createdBy || "",
+        made: parseDate(pr.createdAt), status: st.key, paid: st.paid, current: true,
       });
     }
     return out.sort((a, b) => a.date - b.date);
-  }, [clients, today, owedById]);
+  }, [rows, today, overrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Earlier promises (history), shaped like the current ones; a current promise wins.
+  const currentKeys = useMemo(() => new Set(promises.map((p) => `${p.id}|${ymd(p.date)}`)), [promises]);
+  const past = useMemo(() => {
+    const out = [];
+    for (const h of history || []) {
+      const d = parseDate(h.date);
+      const c = rowById.get(h.clientId);
+      if (!d || !c || currentKeys.has(`${h.clientId}|${ymd(d)}`)) continue;
+      out.push({
+        ...base(c), date: startOfDay(d), amount: Number(h.amount || 0), notes: h.notes || "", by: h.createdBy || "",
+        made: parseDate(h.createdAt), status: historyStatus({ ...h, date: d }, today), paid: Number(h.paidAmount || 0), current: false,
+      });
+    }
+    return out;
+  }, [history, rowById, currentKeys, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  const recordById = useMemo(() => {
+    const m = new Map();
+    for (const h of history || []) {
+      const d = parseDate(h.date);
+      if (!d) continue;
+      const list = m.get(h.clientId) || [];
+      list.push({ date: d, amount: Number(h.amount || 0), status: h.status || "open", paidAmount: h.paidAmount });
+      m.set(h.clientId, list);
+    }
+    for (const list of m.values()) list.sort((a, b) => b.date - a.date);
+    return m;
+  }, [history]);
+
+  const monthStart = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today]);
   const groups = useMemo(() => {
     const in7 = new Date(today.getTime() + 8 * DAY);
+    const missedAll = promises.filter((p) => p.status === "missed").sort((a, b) => b.date - a.date);
     return {
       today: promises.filter((p) => p.status === "today" || p.status === "grace"),
       week: promises.filter((p) => p.status === "upcoming" && p.date < in7),
       upcoming: promises.filter((p) => ["today", "grace", "upcoming"].includes(p.status)),
-      missed: promises.filter((p) => p.status === "missed").sort((a, b) => b.date - a.date),
-      kept: promises.filter((p) => p.status === "kept"),
+      missed: { month: missedAll.filter((p) => p.date >= monthStart), older: missedAll.filter((p) => p.date < monthStart), all: missedAll },
+      kept: [...promises.filter((p) => p.status === "kept"), ...past.filter((p) => p.status === "kept")].sort((a, b) => b.date - a.date),
     };
-  }, [promises, today]);
+  }, [promises, past, today, monthStart]);
 
-  const monthStart = useMemo(() => new Date(today.getFullYear(), today.getMonth(), 1), [today]);
+  // This month: kept vs missed (current promises and history), each promise once.
+  const month_ = useMemo(() => {
+    const due = [...promises, ...past].filter((p) => p.date >= monthStart && p.date <= today);
+    const kept = due.filter((p) => p.status === "kept");
+    const missed = due.filter((p) => p.status === "missed");
+    return { kept: kept.length, keptAmount: kept.reduce((t, p) => t + p.amount, 0), missed: missed.length, missedAmount: missed.reduce((t, p) => t + p.amount, 0) };
+  }, [promises, past, monthStart, today]);
+  const decided = month_.kept + month_.missed;
+  const keepRate = decided ? month_.kept / decided : null;
 
-  // Promises due this month that were kept: current ones (from payments) plus the history
-  // records, each promise counted once.
-  const keptThisMonth = useMemo(() => {
-    const seen = new Set();
-    let n = 0;
-    let amount = 0;
-    for (const p of groups.kept) {
-      if (p.date < monthStart) continue;
-      seen.add(`${p.id}|${ymd(p.date)}`);
-      n++;
-      amount += p.amount;
-    }
-    for (const h of history || []) {
-      const d = parseDate(h.date);
-      if (h.status !== "kept" || !d || d < monthStart || seen.has(`${h.clientId}|${ymd(d)}`)) continue;
-      n++;
-      amount += Number(h.paidAmount || h.amount || 0);
-    }
-    return { n, amount };
-  }, [history, groups.kept, monthStart]);
+  // Calendar: every promise (current and earlier).
+  const entries = useMemo(
+    () => [...promises, ...past].map((p) => ({ key: `${p.id}|${ymd(p.date)}`, dateKey: ymd(p.date), amount: p.amount, status: p.status, name: p.name })),
+    [promises, past]
+  );
 
-  // Missed this month vs older ones nobody cleared.
-  const missed = useMemo(() => {
-    const month = groups.missed.filter((p) => p.date >= monthStart);
-    const older = groups.missed.filter((p) => p.date < monthStart);
-    return { month, older, all: groups.missed };
-  }, [groups.missed, monthStart]);
+  const q = search.trim().toLowerCase();
+  const list = useMemo(() => {
+    let out;
+    if (day) out = [...promises, ...past].filter((p) => ymd(p.date) === day).sort((a, b) => b.amount - a.amount);
+    else if (tab === "missed") out = groups.missed[missedWhen];
+    else if (tab === "kept") out = groups.kept;
+    else out = groups.upcoming;
+    return q ? out.filter((p) => p.name.toLowerCase().includes(q) || p.notes.toLowerCase().includes(q)) : out;
+  }, [day, tab, missedWhen, groups, promises, past, q]);
+  const selected = list.find((p) => keyOf(p) === selectedKey) || null;
+  useEffect(() => {
+    if (!loading && list.length && !list.some((p) => keyOf(p) === selectedKey)) setSelectedKey(keyOf(list[0]));
+  }, [list, selectedKey, loading]);
+  const index = selected ? list.indexOf(selected) : -1;
+  // Open on Missed when nothing is coming up (once, after the figures load).
+  const autoTab = useRef(false);
+  useEffect(() => {
+    if (autoTab.current || loading) return;
+    autoTab.current = true;
+    if (!groups.upcoming.length && groups.missed.month.length) setTab("missed");
+  }, [loading, groups]);
+
+  // ↑/↓ move through the list, C calls. Ignored while typing.
+  useEffect(() => {
+    if (view !== "queue") return undefined;
+    const onKey = (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.closest?.("[role=dialog],[role=listbox],[role=menu]"))) return;
+      if (e.altKey || e.ctrlKey || e.metaKey || !list.length) return;
+      if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); setSelectedKey(keyOf(list[Math.min(list.length - 1, index + 1)])); }
+      else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); setSelectedKey(keyOf(list[Math.max(0, index - 1)])); }
+      else if ((e.key === "c" || e.key === "C") && selected?.phone) window.location.href = callLink(selected.phone);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  useEffect(() => {
+    const el = listRef.current?.querySelector(`[data-key="${CSS.escape(selectedKey || "")}"]`);
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }, [selectedKey]);
+
+  const pickDay = (k) => {
+    setDay(k);
+    setView("queue");
+    if (k) setTimeout(() => queueRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+  const pickTab = (t) => {
+    setTab(t);
+    setDay("");
+  };
+  const onSaved = (id, promise) => {
+    setOverrides((m) => new Map(m).set(id, promise));
+    if (promise) setSelectedKey(`${id}|${promise.date}`);
+  };
 
   const sum = (l) => l.reduce((s, p) => s + p.amount, 0);
-  const q = search.trim().toLowerCase();
-  const filter = (l) => (q ? l.filter((p) => p.name.toLowerCase().includes(q) || p.notes.toLowerCase().includes(q)) : l);
-
-  const events = useMemo(
-    () =>
-      promises.map((p) => ({
-        id: p.id,
-        title: `${money(p.amount)} · ${p.name}`,
-        start: ymd(p.date),
-        allDay: true,
-        backgroundColor: theme.palette[STATUS[p.status].color].main,
-        borderColor: theme.palette[STATUS[p.status].color].main,
-        textColor: "#fff",
-      })),
-    [promises, theme]
-  );
-
-  const table = (list, { showStatus = true } = {}) =>
-    list.length === 0 ? (
-      <Empty title={q ? "No one matches" : "Nothing here"} />
-    ) : (
-      <TableContainer>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Client</TableCell>
-              <TableCell>Promised for</TableCell>
-              <TableCell align="right">Amount</TableCell>
-              <TableCell align="right">Paid since</TableCell>
-              <TableCell align="right">Owes now</TableCell>
-              <TableCell>Notes</TableCell>
-              {showStatus && <TableCell>Status</TableCell>}
-              <TableCell align="right" />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {list.map((p) => (
-              <TableRow key={p.id} hover>
-                <TableCell sx={{ maxWidth: 240 }}>
-                  <MuiLink component={RouterLink} to={`/client/${p.id}`} fontWeight={700} underline="hover">{p.name}</MuiLink>
-                  {p.caseType && <Typography variant="caption" color="text.secondary" display="block">{p.caseType}</Typography>}
-                </TableCell>
-                <TableCell>
-                  <Typography fontWeight={700} fontSize={14}>{p.date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</Typography>
-                  <Typography variant="caption" color={p.status === "missed" ? "error.main" : "text.secondary"}>{relative(p.date, today)}</Typography>
-                </TableCell>
-                <TableCell align="right" sx={{ fontWeight: 800 }}>{money(p.amount)}</TableCell>
-                <TableCell align="right" sx={{ color: p.paid ? "success.main" : "text.disabled", fontWeight: p.paid ? 700 : 400 }}>{p.paid ? money(p.paid) : "—"}</TableCell>
-                <TableCell align="right">{p.owed ? money(p.owed) : "—"}</TableCell>
-                <TableCell sx={{ maxWidth: 280 }}>
-                  <Tooltip title={p.notes || ""}>
-                    <Typography variant="body2" noWrap color={p.notes ? "text.primary" : "text.disabled"}>{p.notes || "—"}</Typography>
-                  </Tooltip>
-                  {p.by && <Typography variant="caption" color="text.secondary">by {p.by}</Typography>}
-                </TableCell>
-                {showStatus && (
-                  <TableCell>
-                    <Chip size="small" label={STATUS[p.status].label} color={STATUS[p.status].color} variant={p.status === "upcoming" ? "outlined" : "filled"} />
-                  </TableCell>
-                )}
-                <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                  <Tooltip title="Log a call or note">
-                    <Button size="small" startIcon={<PhoneInTalkRounded fontSize="small" />} component={RouterLink} to={`/client/${p.id}?tab=notes`}>Log</Button>
-                  </Tooltip>
-                  {p.myCaseLink && (
-                    <Tooltip title="Open in MyCase">
-                      <Button size="small" href={p.myCaseLink} target="_blank" rel="noopener noreferrer" sx={{ minWidth: 0 }}><OpenInNewRounded fontSize="small" /></Button>
-                    </Tooltip>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
-    );
-
+  const dayLabel = day ? new Date(`${day}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }) : "";
   const historyRows = useMemo(
-    () =>
-      (history || [])
-        .map((h) => ({ ...h, d: parseDate(h.date), made: parseDate(h.createdAt) }))
-        .filter((h) => h.d)
-        .sort((a, b) => b.d - a.d),
+    () => (history || []).map((h) => ({ ...h, d: parseDate(h.date), made: parseDate(h.createdAt) })).filter((h) => h.d).sort((a, b) => b.d - a.d),
     [history]
   );
-  const nameById = useMemo(() => new Map(clients.map((c) => [c.id, clientName(c)])), [clients]);
+
+  // List grouping for "Coming up".
+  const groupOf = (p) => (day || tab !== "upcoming" ? null : p.status === "today" || p.status === "grace" ? "Today" : "Next days");
 
   return (
     <Box>
-      <PageHeader title="Promised payments" subtitle="Clients who promised to pay: what is due today, what is coming, and who did not keep their word." />
+      <PageHeader
+        title="Promised payments"
+        subtitle="Pick a day on the calendar or a list, then work the promises one by one. A promise is kept when the client pays the amount by 3 days after the date."
+        actions={
+          <>
+            <TextField size="small" placeholder="Search a client or note" value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 240 }}
+              InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> }} />
+            <Button variant={view === "history" ? "contained" : "outlined"} startIcon={<HistoryRounded />} onClick={() => setView(view === "history" ? "queue" : "history")}>History</Button>
+          </>
+        }
+      />
       {loading && <LinearProgress sx={{ mb: 2 }} />}
 
-      <Tiles min={200} sx={{ mb: 2.5 }}>
-        <StatCard label="Due today" value={groups.today.length} sub={groups.today.length ? `${money(sum(groups.today))} promised` : "Nothing due today"} tone={groups.today.length ? "warn" : "good"} onClick={() => setTab("upcoming")} />
-        <StatCard label="Next 7 days" value={groups.week.length} sub={`${money(sum(groups.week))} promised`} onClick={() => setTab("upcoming")} />
-        <StatCard
-          label="Missed this month"
-          value={missed.month.length}
-          sub={`${money(sum(missed.month))} not paid${missed.older.length ? ` · ${missed.older.length} older still open` : ""}`}
-          tone={missed.month.length ? "bad" : "good"}
-          onClick={() => { setTab("missed"); setMissedWhen("month"); }}
-          help="Promises for this month whose date (plus 3 days) has passed without the full amount paid. Older missed promises that were never cleared are listed under Missed → Older."
-        />
-        <StatCard label="Kept this month" value={keptThisMonth.n} sub={keptThisMonth.n ? `${money(keptThisMonth.amount)} paid on promises` : "Tracked from Nov 19, 2026"} tone="good" onClick={() => setTab("history")} />
-      </Tiles>
-
-      <Card>
-        <Stack direction={{ xs: "column", md: "row" }} alignItems={{ md: "center" }} sx={{ px: 1, borderBottom: 1, borderColor: "divider" }}>
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" sx={{ flex: 1 }}>
-            <Tab value="upcoming" label={`Coming up (${groups.upcoming.length})`} />
-            <Tab value="missed" label={`Missed (${missed.month.length})`} />
-            <Tab value="calendar" label="Calendar" />
-            <Tab value="history" label="History" />
-          </Tabs>
-          {tab !== "calendar" && (
-            <TextField
-              placeholder="Search a client or note"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              sx={{ m: 1, minWidth: 240 }}
-              InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> }}
-            />
-          )}
-        </Stack>
-
-        {tab === "upcoming" && table(filter(groups.upcoming))}
-        {tab === "missed" && (
-          <>
-            <Stack direction="row" spacing={1} sx={{ px: 2, pt: 1.5 }} flexWrap="wrap" useFlexGap>
-              {[
-                ["month", `This month (${missed.month.length})`],
-                ["older", `Older, never cleared (${missed.older.length})`],
-                ["all", `All (${missed.all.length})`],
-              ].map(([k, label]) => (
-                <Chip key={k} label={label} onClick={() => setMissedWhen(k)} color={missedWhen === k ? "primary" : "default"} variant={missedWhen === k ? "filled" : "outlined"} />
-              ))}
-            </Stack>
-            {missedWhen === "older" && (
-              <Typography variant="body2" color="text.secondary" sx={{ px: 2, pt: 1 }}>
-                Promises from earlier months that were never paid or removed. Call the client and either record a new promise or remove the old one on their Notes &amp; promises tab.
+      {/* Calendar and numbers */}
+      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1.5fr) minmax(0, 1fr)" }, mb: 2 }}>
+        <PromiseCalendar month={month} setMonth={setMonth} entries={entries} day={day} setDay={pickDay} todayKey={todayKey} />
+        <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gridTemplateRows: "auto 1fr" }}>
+          <Card sx={{ gridColumn: "1 / -1", p: 2.25, display: "flex", alignItems: "center", gap: 2.25 }}>
+            <Ring value={keepRate || 0} size={92} stroke={10} label={keepRate == null ? "—" : `${Math.round(keepRate * 100)}%`} color={theme.palette.success.main} track={alpha(theme.palette.primary.main, 0.1)} />
+            <Box>
+              <Typography variant="body2" fontWeight={800} color="text.secondary">Kept this month</Typography>
+              <Typography sx={{ font: `700 26px ${FONT_HEADING}` }}>{decided ? `${month_.kept} of ${decided}` : "—"}</Typography>
+              <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                {month_.kept ? `${money(month_.keptAmount)} paid on promises` : "Promises are tracked from Nov 19, 2026"}
               </Typography>
-            )}
-            {table(filter(missed[missedWhen]), { showStatus: false })}
-          </>
-        )}
-        {tab === "calendar" && (
-          <Box
-            sx={{
-              p: 2,
-              "& .fc": { fontFamily: theme.typography.fontFamily },
-              "& .fc .fc-toolbar-title": { fontFamily: theme.typography.h5.fontFamily, fontSize: 20 },
-              "& .fc .fc-button-primary": { bgcolor: "primary.main", borderColor: "primary.main", textTransform: "none" },
-              "& .fc .fc-daygrid-day.fc-day-today": { bgcolor: alpha(theme.palette.secondary.main, 0.08) },
-              "& .fc-event": { cursor: "pointer", fontSize: 12, px: 0.5 },
-              "& .fc-theme-standard td, & .fc-theme-standard th, & .fc-theme-standard .fc-scrollgrid": { borderColor: "divider" },
-            }}
-          >
-            <FullCalendar
-              plugins={[dayGridPlugin]}
-              initialView="dayGridMonth"
-              height="auto"
-              events={events}
-              dayMaxEvents={4}
-              headerToolbar={{ left: "prev,next today", center: "title", right: "" }}
-              eventClick={(info) => navigate(`/client/${info.event.id}`)}
-            />
-            <Stack direction="row" spacing={1} sx={{ mt: 1.5 }} flexWrap="wrap" useFlexGap>
-              {["today", "upcoming", "missed", "kept"].map((k) => <Chip key={k} size="small" label={STATUS[k].label} color={STATUS[k].color} />)}
-            </Stack>
-          </Box>
-        )}
-        {tab === "history" &&
-          (history === null ? (
+            </Box>
+          </Card>
+          <Num label="Due today" value={groups.today.length} sub={groups.today.length ? `${money(sum(groups.today))} promised` : "nothing due today"} color={groups.today.length ? "#C9961A" : undefined}
+            onClick={() => (groups.today.length ? pickDay(todayKey) : pickTab("upcoming"))} />
+          <Num label="Next 7 days" value={groups.week.length} sub={`${money(sum(groups.week))} promised`} onClick={() => pickTab("upcoming")} />
+          <Num label="Missed this month" value={groups.missed.month.length} color={groups.missed.month.length ? "error.main" : undefined}
+            sub={`${money(sum(groups.missed.month))}${groups.missed.older.length ? ` · ${groups.missed.older.length} older open` : " · need a new date"}`}
+            onClick={() => { pickTab("missed"); setMissedWhen("month"); }} />
+        </Box>
+      </Box>
+
+      {view === "history" ? (
+        <Card>
+          <Typography variant="h6" sx={{ px: 2.25, pt: 2 }}>Promise history</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ px: 2.25, pb: 1 }}>Every promise made from Nov 19, 2026 on, marked kept or broken each night.</Typography>
+          {history === null ? (
             <LinearProgress />
           ) : historyRows.length === 0 ? (
-            <Empty title="No promise history yet">Every promise made from Nov 19, 2026 on is kept here and marked kept or broken each night.</Empty>
+            <Empty title="No promise history yet" />
           ) : (
             <TableContainer>
               <Table size="small">
@@ -342,26 +297,103 @@ export default function PromisedPayments() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {historyRows.filter((h) => !q || (nameById.get(h.clientId) || "").toLowerCase().includes(q)).map((h) => (
-                    <TableRow key={h.id} hover>
-                      <TableCell><MuiLink component={RouterLink} to={`/client/${h.clientId}`} fontWeight={700} underline="hover">{nameById.get(h.clientId) || "Client"}</MuiLink></TableCell>
-                      <TableCell>{h.d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</TableCell>
-                      <TableCell align="right">{money(h.amount)}</TableCell>
-                      <TableCell align="right">{h.paidAmount != null ? money(h.paidAmount) : "—"}</TableCell>
-                      <TableCell>{h.createdBy || "—"}{h.made ? <Typography variant="caption" color="text.secondary" display="block">{h.made.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</Typography> : null}</TableCell>
-                      <TableCell>
-                        <Chip size="small" label={h.status === "kept" ? "Kept" : h.status === "broken" ? "Broken" : "Open"} color={h.status === "kept" ? "success" : h.status === "broken" ? "error" : "default"} variant={h.status === "open" ? "outlined" : "filled"} />
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {historyRows
+                    .filter((h) => !q || (rowById.get(h.clientId) ? clientName(rowById.get(h.clientId)) : "").toLowerCase().includes(q))
+                    .map((h) => (
+                      <TableRow key={h.id} hover>
+                        <TableCell><MuiLink component={RouterLink} to={`/client/${h.clientId}`} fontWeight={700} underline="hover">{rowById.get(h.clientId) ? clientName(rowById.get(h.clientId)) : "Client"}</MuiLink></TableCell>
+                        <TableCell>{h.d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</TableCell>
+                        <TableCell align="right">{money(h.amount)}</TableCell>
+                        <TableCell align="right">{h.paidAmount != null ? money(h.paidAmount) : "—"}</TableCell>
+                        <TableCell>{h.createdBy || "—"}{h.made ? <Typography variant="caption" color="text.secondary" display="block">{h.made.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</Typography> : null}</TableCell>
+                        <TableCell>
+                          <Chip size="small" label={h.status === "kept" ? "Kept" : h.status === "broken" ? "Broken" : "Open"} color={h.status === "kept" ? "success" : h.status === "broken" ? "error" : "default"} variant={h.status === "open" ? "outlined" : "filled"} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
                 </TableBody>
               </Table>
             </TableContainer>
-          ))}
-      </Card>
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.5 }}>
-        A promise is kept when the client pays at least the promised amount between the day it was made and {GRACE_DAYS} days after the promised date. Add or change a promise from the client's Notes &amp; promises tab.
-      </Typography>
+          )}
+        </Card>
+      ) : (
+        <Box ref={queueRef} sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "400px minmax(0, 1fr)" }, alignItems: "start", scrollMarginTop: 80 }}>
+          {/* The list */}
+          <Card sx={{ position: { lg: "sticky" }, top: { lg: 80 }, display: "flex", flexDirection: "column", maxHeight: { lg: "calc(100vh - 100px)" }, overflow: "hidden" }}>
+            <Tabs value={day ? false : tab} onChange={(_, v) => pickTab(v)} variant="scrollable" scrollButtons={false} sx={{ borderBottom: 1, borderColor: "divider", minHeight: 46, px: 0.5 }}>
+              {[["upcoming", "Coming up", groups.upcoming.length], ["missed", "Missed", groups.missed.month.length], ["kept", "Kept", groups.kept.length]].map(([k, l, n]) => (
+                <Tab key={k} value={k} sx={{ textTransform: "none", fontWeight: 800, minHeight: 46, px: 1.25, minWidth: 0 }}
+                  label={<Stack direction="row" spacing={0.75} alignItems="center"><span>{l}</span><Chip size="small" label={n} color={!day && tab === k ? "primary" : "default"} sx={{ height: 19, fontSize: 11, fontWeight: 800 }} /></Stack>} />
+              ))}
+            </Tabs>
+            {day && (
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.75, py: 1, borderBottom: 1, borderColor: "divider", bgcolor: alpha(theme.palette.primary.main, 0.07) }}>
+                <Typography variant="body2" fontWeight={800} color="primary.main">{dayLabel} · {money(sum(list))} promised</Typography>
+                <Button size="small" onClick={() => setDay("")}>Clear</Button>
+              </Stack>
+            )}
+            {!day && tab === "missed" && (
+              <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ p: 1.25, borderBottom: 1, borderColor: "divider" }}>
+                {[["month", `This month (${groups.missed.month.length})`], ["older", `Older, never cleared (${groups.missed.older.length})`], ["all", `All (${groups.missed.all.length})`]].map(([k, l]) => (
+                  <Chip key={k} size="small" label={l} onClick={() => setMissedWhen(k)} color={missedWhen === k ? "primary" : "default"} variant={missedWhen === k ? "filled" : "outlined"} sx={{ fontWeight: 800 }} />
+                ))}
+              </Stack>
+            )}
+            <Box ref={listRef} sx={{ overflowY: "auto", flex: 1, maxHeight: { xs: 420, lg: "none" } }}>
+              {list.map((p, i) => {
+                const k = keyOf(p);
+                const on = k === selectedKey;
+                const g = groupOf(p);
+                const showGroup = g && (i === 0 || groupOf(list[i - 1]) !== g);
+                const st = STATUS[p.status];
+                return (
+                  <React.Fragment key={k}>
+                    {showGroup && (
+                      <Typography variant="caption" fontWeight={800} color="text.secondary" sx={{ display: "block", px: 1.75, py: 0.75, letterSpacing: ".08em", textTransform: "uppercase", bgcolor: alpha(theme.palette.primary.main, 0.03), borderBottom: 1, borderColor: "divider" }}>{g}</Typography>
+                    )}
+                    <Box data-key={k} onClick={() => setSelectedKey(k)}
+                      sx={{
+                        display: "grid", gridTemplateColumns: "44px minmax(0,1fr) auto", gap: 1.25, alignItems: "center", px: 1.75, py: 1.1, cursor: "pointer", position: "relative",
+                        borderBottom: 1, borderColor: "divider", bgcolor: on ? alpha(theme.palette.primary.main, 0.08) : "transparent",
+                        "&:hover": { bgcolor: on ? alpha(theme.palette.primary.main, 0.1) : alpha(theme.palette.primary.main, 0.03) },
+                        "&::before": on ? { content: '""', position: "absolute", left: 0, top: 8, bottom: 8, width: 3, borderRadius: 3, bgcolor: "primary.main" } : undefined,
+                      }}>
+                      <Box sx={{ width: 44, borderRadius: 2, overflow: "hidden", textAlign: "center", border: 1, borderColor: "divider", bgcolor: "background.paper" }}>
+                        <Box sx={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", color: "#fff", bgcolor: dotColor(theme, p.status), py: "1px" }}>{p.date.toLocaleDateString("en-US", { month: "short" }).toUpperCase()}</Box>
+                        <Box sx={{ font: `700 17px ${FONT_HEADING}`, py: "2px" }}>{p.date.getDate()}</Box>
+                      </Box>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" fontWeight={800} noWrap>{p.name}</Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap component="div">
+                          <Box component="span" sx={{ color: dotColor(theme, p.status), fontWeight: 800 }}>● {st.label}</Box> · {relative(p.date, today)}{p.current ? "" : " · earlier"}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ textAlign: "right" }}>
+                        <Typography variant="body2" fontWeight={800}>{money(p.amount)}</Typography>
+                        <Typography variant="caption" color={p.paid ? "success.main" : "text.secondary"} fontWeight={700} noWrap component="div">{p.paid ? `${money(p.paid)} paid` : "nothing paid yet"}</Typography>
+                      </Box>
+                    </Box>
+                  </React.Fragment>
+                );
+              })}
+              {!loading && list.length === 0 && (
+                <Typography color="text.secondary" sx={{ p: 4, textAlign: "center" }}>{q ? "No one matches." : day ? "No promises on this day." : "Nothing here."}</Typography>
+              )}
+            </Box>
+            <Stack direction="row" justifyContent="space-between" sx={{ px: 1.75, py: 1, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
+              <Typography variant="caption" fontWeight={700}>{index >= 0 ? `${index + 1} of ` : ""}{list.length} promises</Typography>
+              <Typography variant="caption" fontWeight={700} sx={{ display: { xs: "none", sm: "block" } }}>↑ ↓ move · C call</Typography>
+            </Stack>
+          </Card>
+
+          {/* The selected promise */}
+          <PromisePanel p={selected} record={selected ? recordById.get(selected.id) : []} today={today} editor={editor} onSaved={onSaved} notify={setToast} />
+        </Box>
+      )}
+
+      <Snackbar open={!!toast} autoHideDuration={3500} onClose={() => setToast(null)}>
+        {toast ? <Alert severity={toast.type} variant="filled">{toast.msg}</Alert> : <span />}
+      </Snackbar>
     </Box>
   );
 }

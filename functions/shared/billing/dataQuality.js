@@ -96,6 +96,22 @@ const addMonths = (ym, n) => {
   return "ranOut";
 } exports.planEndedReason = planEndedReason;
 
+/**
+ * Additional services (removal defense, derivative...) are billed as two invoices: an
+ * initial payment and a monthly plan. Services whose initial invoice is tagged but that
+ * have no plan yet; [] when everything is paired.
+ */
+ function servicesMissingPlan(c) {
+  const roles = c.invoiceRoles || {};
+  const services = c.invoiceServices || {};
+  const withPlan = new Set((c.plans || []).map((p) => p && p.service).filter(Boolean));
+  const out = new Set();
+  for (const [inv, svc] of Object.entries(services)) {
+    if (svc && svc !== "Main case" && roles[inv] === "initial" && !withPlan.has(svc)) out.add(svc);
+  }
+  return [...out];
+} exports.servicesMissingPlan = servicesMissingPlan;
+
 /** The schedule entry that records a confirmed monthly amount from `fromYm` on. */
  const confirmedEntry = (amount, fromYm, by) => ({
   amount: Number(amount),

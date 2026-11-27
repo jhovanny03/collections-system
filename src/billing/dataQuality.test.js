@@ -1,4 +1,4 @@
-import { steadyPayment, planEndedReason, expectedAmount, confirmedEntry } from "./dataQuality";
+import { steadyPayment, planEndedReason, expectedAmount, confirmedEntry, servicesMissingPlan } from "./dataQuality";
 import { clientPosition } from "./ledger";
 
 const nov20 = new Date(2026, 10, 20, 12);
@@ -38,6 +38,13 @@ describe("data quality", () => {
     expect(before).toBeGreaterThan(0);
     expect(clientPosition(fixed, nov20).owedNow).toBe(0);
     expect(steadyPayment(fixed, nov20)).toBeNull();
+  });
+
+  test("an additional service with its initial tagged but no monthly plan yet", () => {
+    const c = { invoiceRoles: { 1: "initial", 2: "installment", 9: "initial" }, invoiceServices: { 9: "Removal defense" }, plans: [{ invoiceId: "2" }] };
+    expect(servicesMissingPlan(c)).toEqual(["Removal defense"]);
+    expect(servicesMissingPlan({ ...c, plans: [...c.plans, { invoiceId: "10", service: "Removal defense" }] })).toEqual([]);
+    expect(servicesMissingPlan({ invoiceRoles: { 1: "initial" }, invoiceServices: { 1: "Main case" } })).toEqual([]);
   });
 
   test("why a plan ended owing", () => {

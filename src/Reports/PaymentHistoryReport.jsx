@@ -34,6 +34,8 @@ import {
 import db from "../firebase";
 import { asDate, formatDate } from "../utils/dates";
 import { callsByClient, creditFor, CREDIT_DAYS } from "../billing/callCredit";
+import { useBook } from "../data/BookProvider";
+import { isReceived } from "../billing/mycaseOverlay";
 
 // ---------- helpers ----------
 const toMoney = (n) =>
@@ -86,6 +88,34 @@ export default function PaymentHistoryReport() {
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Clients whose invoices are still to tag count their MyCase payments (mycaseOverlay), but
+  // the sync files payment records only for tagged clients: add those payments here so
+  // this report matches Home. Keyed by MyCase case id, from the prepared rows.
+  const { rows: bookRows } = useBook();
+  const untaggedByCase = useMemo(() => {
+    const m = new Map();
+    for (const r of bookRows) {
+      if (r.source !== "MyCase, invoices to tag" || r.status === "closed") continue;
+      const id = (String(r.myCaseLink || "").match(/court_cases\/(\d+)/) || [])[1];
+      if (id) m.set(id, r);
+    }
+    return m;
+  }, [bookRows]);
+  const myCaseExtra = async (startStr, endStr, have) => {
+    if (!untaggedByCase.size || (recordedByFilter !== "ALL" && recordedByFilter !== "MyCase sync")) return [];
+    const snap = await getDocs(query(collection(db, "mycasePayments"), where("date", ">=", startStr), where("date", "<=", endStr)));
+    const out = [];
+    snap.forEach((d) => {
+      const p = d.data();
+      const r = untaggedByCase.get(String(p.caseId || ""));
+      const id = `mycase_${p.id || d.id}`;
+      if (!r || !isReceived(p) || have.has(id)) return;
+      if (caseTypeFilter !== "ALL" && r.caseType !== caseTypeFilter) return;
+      out.push({ id, clientId: r.id, clientName: r.name, caseType: r.caseType, caseStatus: r.caseStatus, amount: Number(p.amount), paymentDate: String(p.date).slice(0, 10), recordedBy: "MyCase sync", source: "mycase (invoices to tag)" });
+    });
+    return out;
+  };
   const [err, setErr] = useState("");
 
   // Digest
@@ -171,18 +201,22 @@ export default function PaymentHistoryReport() {
           getDocs(buildPaymentsQuery(last7StartStr, last7EndStr)),
         ]);
 
-        const sumSnap = (snap) =>
-          snap.docs.reduce((sum, d) => sum + Number(d.data()?.amount || 0), 0);
+        // Payment-plan money, like Home: initial payments are counted apart (intake's).
+        const tally = async (snap, a, b) => {
+          const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const extra = await myCaseExtra(a, b, new Set(docs.map((x) => x.id)));
+          const all = [...docs, ...extra];
+          const plan = all.filter((x) => x.kind !== "initial");
+          return { total: plan.reduce((t, x) => t + Number(x.amount || 0), 0), count: plan.length, initial: all.filter((x) => x.kind === "initial").reduce((t, x) => t + Number(x.amount || 0), 0) };
+        };
+        const [tT, tY, t7] = await Promise.all([tally(snapToday, todayStr, todayStr), tally(snapYday, ydayStr, ydayStr), tally(snapLast7, last7StartStr, last7EndStr)]);
 
         if (!mounted) return;
 
         setDigest({
-          todayTotal: sumSnap(snapToday),
-          todayCount: snapToday.size,
-          ydayTotal: sumSnap(snapYday),
-          ydayCount: snapYday.size,
-          last7Total: sumSnap(snapLast7),
-          last7Count: snapLast7.size,
+          todayTotal: tT.total, todayCount: tT.count, todayInitial: tT.initial,
+          ydayTotal: tY.total, ydayCount: tY.count, ydayInitial: tY.initial,
+          last7Total: t7.total, last7Count: t7.count, last7Initial: t7.initial,
           loading: false,
         });
       } catch (e) {
@@ -197,7 +231,7 @@ export default function PaymentHistoryReport() {
     };
     // refresh digest when server-side filters change
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildPaymentsQuery only reads the filters listed here
-  }, [recordedByFilter, caseTypeFilter]);
+  }, [recordedByFilter, caseTypeFilter, untaggedByCase]);
 
   // ----- Table loader (range-selected + server-side filters) -----
   useEffect(() => {
@@ -218,9 +252,10 @@ export default function PaymentHistoryReport() {
 
         const snap = await getDocs(qy);
         const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const extra = await myCaseExtra(startDate, endDate, new Set(data.map((x) => x.id)));
 
         if (!mounted) return;
-        setRows(data);
+        setRows([...data, ...extra].sort((a, b) => String(b.paymentDate || "").localeCompare(String(a.paymentDate || ""))));
       } catch (e) {
         console.error(e);
         if (!mounted) return;
@@ -234,7 +269,7 @@ export default function PaymentHistoryReport() {
       mounted = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildPaymentsQuery only reads the filters listed here
-  }, [startDate, endDate, recordedByFilter, caseTypeFilter]);
+  }, [startDate, endDate, recordedByFilter, caseTypeFilter, untaggedByCase]);
 
   // "After a call by": RingCentral call that reached the client up to CREDIT_DAYS days before
   // the payment (src/billing/callCredit.js). Initial payments are left out.
@@ -353,7 +388,7 @@ export default function PaymentHistoryReport() {
                 {digest.loading ? "…" : toMoney(digest.todayTotal)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {digest.loading ? " " : `${digest.todayCount} payment(s)`}
+                {digest.loading ? " " : `${digest.todayCount} plan payment(s)${digest.todayInitial ? ` · + ${toMoney(digest.todayInitial)} initial` : ""}`}
               </Typography>
 
               <Box sx={{ mt: 1.5 }}>
@@ -379,7 +414,7 @@ export default function PaymentHistoryReport() {
                 {digest.loading ? "…" : toMoney(digest.ydayTotal)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {digest.loading ? " " : `${digest.ydayCount} payment(s)`}
+                {digest.loading ? " " : `${digest.ydayCount} plan payment(s)${digest.ydayInitial ? ` · + ${toMoney(digest.ydayInitial)} initial` : ""}`}
               </Typography>
 
               <Box sx={{ mt: 1.5 }}>
@@ -405,7 +440,7 @@ export default function PaymentHistoryReport() {
                 {digest.loading ? "…" : toMoney(digest.last7Total)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {digest.loading ? " " : `${digest.last7Count} payment(s)`}
+                {digest.loading ? " " : `${digest.last7Count} plan payment(s)${digest.last7Initial ? ` · + ${toMoney(digest.last7Initial)} initial` : ""}`}
               </Typography>
 
               <Box sx={{ mt: 1.5, display: "flex", gap: 1, flexWrap: "wrap" }}>

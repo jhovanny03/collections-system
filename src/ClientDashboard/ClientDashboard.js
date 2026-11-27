@@ -7,7 +7,7 @@ import { Box, Button, Card, Chip, LinearProgress, Stack, Tab, Tabs, Typography, 
 import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import ArrowBackRounded from "@mui/icons-material/ArrowBackRounded";
 import db from "../firebase";
-import { collection, doc, onSnapshot, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, onSnapshot, query, where } from "firebase/firestore";
 import { useAuth } from "../auth/useAuth";
 import { clientRows, money } from "../billing/portfolio";
 import { describeSchedule, sortedPlans, planSchedule } from "../billing/plans";
@@ -28,6 +28,7 @@ import InvoiceAdjustments from "./InvoiceAdjustments";
 import ClientActions from "./ClientActions";
 import LetterDrafter from "./LetterDrafter";
 import CaseOnHoldToggle from "./CaseOnHoldToggle";
+import { SetupDialog } from "../pages/CaseSetup";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -40,7 +41,10 @@ const TABS = [
 function ClientDashboard() {
   const { clientId } = useParams();
   const [params, setParams] = useSearchParams();
-  const { isEditorOrHigher } = useAuth();
+  const { isEditorOrHigher, canManageUsers } = useAuth();
+  // Admin fix: re-tag this client's MyCase invoices (wrong plan, wrong service...).
+  const [fixCase, setFixCase] = useState(null);
+  const [fixNote, setFixNote] = useState("");
   const editor = isEditorOrHigher();
   const [client, setClient] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +130,10 @@ function ClientDashboard() {
               {client.callStats?.missedCallback && <Chip size="small" label="Called us, missed: call back" color="secondary" />}
               <Chip size="small" variant="outlined" label={row?.source === "Typed by hand" ? "Payments typed by hand (no MyCase link)" : row?.source === "MyCase, invoices to tag" ? "Payments from MyCase · invoices to tag" : "Payments sync from MyCase"} />
               {client.caseStatus && <Chip size="small" variant="outlined" label={`Case: ${client.caseStatus}`} />}
+              {client.mycaseStage && (
+                <Chip size="small" variant="outlined" color={String(client.mycaseCaseStatus || "").toLowerCase() === "closed" ? "default" : "info"}
+                  label={`MyCase: ${client.mycaseStage}${String(client.mycaseCaseStatus || "").toLowerCase() === "closed" ? " (closed)" : ""}`} />
+              )}
             </Stack>
           </Box>
           <Stack spacing={1} alignItems={{ md: "flex-end" }} sx={{ flexShrink: 0 }}>
@@ -139,6 +147,17 @@ function ClientDashboard() {
                 Open in MyCase
               </Button>
             )}
+            {canManageUsers() && caseIdOf(client) && (
+              <Button size="small" color="secondary" title="Admin: change what each MyCase invoice is and which service it is for; plans and payments are rebuilt from MyCase."
+                onClick={async () => {
+                  const s = await getDoc(doc(db, "mycaseCases", caseIdOf(client)));
+                  if (s.exists()) setFixCase({ ...s.data(), id: s.id, trackedClientId: client.id });
+                  else setFixNote("This client's MyCase case is not in the sync yet.");
+                }}>
+                Fix invoices &amp; plans
+              </Button>
+            )}
+            {fixNote && <Typography variant="caption" color="text.secondary">{fixNote}</Typography>}
           </Stack>
         </Stack>
 
@@ -220,6 +239,10 @@ function ClientDashboard() {
         </>
       )}
       {tab === "letters" && <LetterDrafter client={client} />}
+      {fixCase && (
+        <SetupDialog kase={fixCase} mode="fix" onClose={() => setFixCase(null)}
+          onDone={(k, data) => { setFixCase(null); setFixNote(`Saved: plans and payments rebuilt from MyCase (${data?.imported ?? 0} payments).`); }} />
+      )}
     </Box>
   );
 }

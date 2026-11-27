@@ -69,7 +69,7 @@ export function BookProvider({ children }) {
 }
 
 /**
- * { ready, summaryReady, rows, summary, months, byMonth, recent, mycaseMonth, generatedAt, source,
+ * { ready, summaryReady, rows, summary, months, byMonth, daily, recent, mycaseMonth, promiseMonths, generatedAt, source,
  *   refresh, refreshing }  — rows have the same fields as clientRows() (src/billing/book.js).
  */
 export function useBook() {
@@ -83,7 +83,7 @@ export function useBook() {
     if (missing) {
       return {
         ready: !loading, summaryReady: !loading, source: "live", rows: local.rows, summary: local.summary, months: localMonths,
-        byMonth: collectionsByMonth(local.payments, 12), recent: local.payments.slice(0, 25), mycaseMonth: null,
+        byMonth: collectionsByMonth(local.payments, 12), daily: null, recent: local.payments.slice(0, 25), mycaseMonth: null, promiseMonths: null,
         generatedAt: null, refresh: ctx.refresh, refreshing: ctx.refreshing,
       };
     }
@@ -92,8 +92,8 @@ export function useBook() {
       // summaryReady: totals and charts (one small document); ready: every client row too.
       ready: !!(m && ctx.rows), summaryReady: !!m, source: "prepared", rows: ctx.rows || [],
       summary: m ? { ...m.summary, asOf: new Date(m.summary.asOf) } : EMPTY_SUMMARY,
-      months: m ? m.months : [], byMonth: m ? m.byMonth : [], recent: m ? (m.recent || []).map(hydratePayment) : [],
-      mycaseMonth: m ? m.mycaseMonth : null, generatedAt: m ? new Date(m.generatedAt) : null,
+      months: m ? m.months : [], byMonth: m ? m.byMonth : [], daily: (m && m.daily) || null, recent: m ? (m.recent || []).map(hydratePayment) : [],
+      mycaseMonth: m ? m.mycaseMonth : null, promiseMonths: m ? m.promiseMonths || null : null, generatedAt: m ? new Date(m.generatedAt) : null,
       refresh: ctx.refresh, refreshing: ctx.refreshing,
     };
   }, [missing, loading, local, localMonths, ctx]);

@@ -29,19 +29,21 @@ function extras(c) {
     // (phones, promise and lastContact are already on the row: the app maps them back.)
     lastCall: c.lastCall || null,
     callStats: c.callStats || null,
+    // Where the case is in MyCase (copied by the sync), e.g. "Prima Facie Received".
+    mycaseStage: c.mycaseStage || null,
   };
 }
 
 /** Everything the snapshot holds, computed from client documents (pure, for tests). */
-function computeSnapshot(clientDocs, now = new Date()) {
-  const { clientRows, summarize, allPayments, collectionRateByMonth, collectionsByMonth } = require("./shared/billing/book");
+function computeSnapshot(clientDocs, now = new Date(), { listMonths = new Map(), calls = [], cases = new Map(), moneyBack = new Map(), aiTags = new Map() } = {}) {
+  const { clientRows, summarize, allPayments, collectionRateByMonth, collectionsByMonth, planMoneyByDay } = require("./shared/billing/book");
   const { withMyCasePayments } = require("./shared/billing/mycaseOverlay");
   const clients = clientDocs.map((c) => withMyCasePayments(c));
   const rows = clientRows(clients, now);
   const byId = new Map(clients.map((c) => [c.id, c]));
   rows.forEach((r) => Object.assign(r, extras(byId.get(r.id) || {})));
   // Data quality page: steady payments that differ from the plan, and why ended plans owe.
-  const { steadyPayment, planEndedReason } = require("./shared/billing/dataQuality");
+  const { steadyPayment, planEndedReason, servicesMissingPlan } = require("./shared/billing/dataQuality");
   rows.forEach((r) => {
     const c = byId.get(r.id);
     if (!c || r.status === "closed") return;
@@ -49,8 +51,48 @@ function computeSnapshot(clientDocs, now = new Date()) {
       const sp = steadyPayment(c, now);
       if (sp) r.steadyPay = sp;
       if (r.planEnded) r.endedReason = planEndedReason(c, now);
+      const missing = servicesMissingPlan(c);
+      if (missing.length) r.servicesMissingPlan = missing;
     } catch (e) {
       /* a malformed plan is left for the other checks */
+    }
+  });
+  // Follow-ups "who to call first": how likely each client who owes is to pay, and when to call.
+  const { likelyToPay, answerTable, bestTime, promiseMonths } = require("./shared/billing/callPriority");
+  const table = answerTable(calls);
+  const callsBy = new Map();
+  for (const c of calls) for (const id of c.clientIds || []) callsBy.set(id, [...(callsBy.get(id) || []), c]);
+  rows.forEach((r) => {
+    const c = byId.get(r.id);
+    if (!c || r.status === "closed" || r.status === "paused") return;
+    const missedNow = Number(r.expectedThisMonth || 0) - Number(r.collectedThisMonth || 0);
+    if (!(r.amountDue > 0.005 || missedNow > 0.005)) return;
+    try {
+      const s = likelyToPay(c, { asOf: now, listMonths: listMonths.get(r.id) || [], now: { missedMonths: r.missedMonths, planEnded: r.planEnded, lastPaymentDate: r.lastPayment && r.lastPayment.date } });
+      r.callPriority = { p: Math.round(s.p * 100) / 100, band: s.band, reasons: s.reasons, best: bestTime(callsBy.get(r.id), table) };
+    } catch (e) {
+      /* a malformed plan gets no score */
+    }
+  });
+  // Data quality, "Termination & closing": signals from the MyCase case, refunds and notes.
+  const { closeCheck, titleKey } = require("./shared/billing/closeCheck");
+  const { caseIdOf } = require("./shared/billing/mycaseOverlay");
+  rows.forEach((r) => {
+    const c = byId.get(r.id);
+    if (!c || r.status === "closed") return;
+    try {
+      const caseId = caseIdOf(c);
+      const caseDoc = caseId ? cases.get(String(caseId)) || null : null;
+      const title = (caseDoc && caseDoc.name) || c.caseTitle || "";
+      const tag = aiTags.get(r.id);
+      const ai = tag && tag.titleKey === titleKey(title) ? tag : null;
+      const cc = closeCheck(c, { caseDoc, money: caseId ? moneyBack.get(String(caseId)) : null, ai, row: r, asOf: now });
+      if (!cc) return;
+      const seen = c.dataQuality && c.dataQuality.closeCheck;
+      if (seen && seen.decision === "dismissed" && seen.signature === cc.signature) cc.dismissed = { by: seen.by || "", at: seen.at || "" };
+      r.closeCheck = cc;
+    } catch (e) {
+      /* a malformed record is left for the other checks */
     }
   });
   const payments = allPayments(clients);
@@ -63,7 +105,11 @@ function computeSnapshot(clientDocs, now = new Date()) {
     summary: plain(summarize(rows, payments, now)),
     months: plain(collectionRateByMonth(clients, 12, now)),
     byMonth: plain(collectionsByMonth(payments, 12, now)),
+    // Home: plan money per day this month and last month (calendar + pace line).
+    daily: plain(planMoneyByDay(clients, now)),
     recent: plain(payments.slice(0, 25)),
+    // Follow-ups report and Monthly briefing: payment promises month by month (from notes).
+    promiseMonths: plain(promiseMonths(clients, now, listMonths)),
   };
 }
 
@@ -117,7 +163,42 @@ async function refreshPortfolio(db, { now = new Date(), by = "system" } = {}) {
   const t0 = Date.now();
   const snap = await db.collection("clients").get();
   const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  const data = computeSnapshot(docs, now);
+  // Follow-up lists (who was on them, month by month) and RingCentral calls, for the
+  // "who to call first" score.
+  const listMonths = new Map();
+  try {
+    const cohorts = (await db.collection("followUpsCohorts").get()).docs.map((d) => d.id).filter((id) => /^\d{4}-\d{2}$/.test(id)).sort().slice(-13);
+    for (const ym of cohorts) {
+      const items = (await db.collection("followUpsCohorts").doc(ym).collection("items").get()).docs.map((d) => d.data());
+      for (const i of items) {
+        if ((i.section || "current") !== "current" || !i.clientId) continue;
+        listMonths.set(i.clientId, [...(listMonths.get(i.clientId) || []), ym]);
+      }
+    }
+  } catch (e) {
+    console.warn("Follow-up history skipped:", e.message);
+  }
+  let calls = [];
+  try {
+    calls = (await db.collection("ringcentralCalls").get()).docs.map((d) => d.data());
+  } catch (e) {
+    console.warn("Call history skipped:", e.message);
+  }
+  // MyCase cases (current title, status, stage), refunds and returned payments, and the AI
+  // reading of unclear titles: for Data quality "Termination & closing".
+  const cases = new Map();
+  const moneyBack = new Map();
+  const aiTags = new Map();
+  try {
+    (await db.collection("mycaseCases").select("name", "status", "caseStage", "closedDate").get()).forEach((d) => cases.set(d.id, d.data()));
+    const { moneyBackByCase } = require("./shared/billing/closeCheck");
+    const neg = (await db.collection("mycasePayments").where("amount", "<", 0).select("caseId", "amount", "type", "status", "date").get()).docs.map((d) => d.data());
+    moneyBackByCase(neg).forEach((v, k) => moneyBack.set(k, v));
+    (await db.collection("closeChecks").get()).forEach((d) => aiTags.set(d.id, d.data()));
+  } catch (e) {
+    console.warn("Termination & closing inputs skipped:", e.message);
+  }
+  const data = computeSnapshot(docs, now, { listMonths, calls, cases, moneyBack, aiTags });
   const batches = batchRows(data.rows);
   const generatedAt = now.toISOString();
   const health = batchRows(data.health);
@@ -133,7 +214,8 @@ async function refreshPortfolio(db, { now = new Date(), by = "system" } = {}) {
   }
   await db.doc("portfolio/summary").set({
     generatedAt, by, batches: batches.length, healthBatches: health.length, clients: docs.length,
-    summary: data.summary, months: data.months, byMonth: data.byMonth, recent: data.recent, mycaseMonth: month,
+    summary: data.summary, months: data.months, byMonth: data.byMonth, daily: data.daily, recent: data.recent, mycaseMonth: month,
+    promiseMonths: data.promiseMonths,
   });
   return { clients: docs.length, batches: batches.length, ms: Date.now() - t0 };
 }

@@ -91,3 +91,18 @@ test("new plan: refuses what billing must fix", () => {
   assert.throws(() => plansWithNewInvoice(one, inv, { monthlyAmount: 200 }), /first installment date/);
   assert.equal(plansWithNewInvoice(one, inv, { monthlyAmount: "150", startDate: "2026-10-01" })[1].startDate, "2026-10-01");
 });
+
+test("a service with its own plan drops the hand-entered adjustment for it from plan 1", () => {
+  const client = {
+    invoiceTotal: 10350, initialPaymentAmount: 4350,
+    invoiceAdjustments: [{ type: "REMOVAL_DEFENSE", amount: 17500, downPayment: 4000 }, { type: "OTHER", amount: 300 }],
+    plans: [
+      { invoiceId: "1", total: 6000, monthlyAmount: 500, startDate: "2025-04-15" },
+      { invoiceId: "2", total: 13500, monthlyAmount: 500, startDate: "2026-06-15", service: "Removal defense" },
+    ],
+  };
+  const [main, rd] = planViews(client);
+  assert.deepEqual(main.invoiceAdjustments.map((a) => a.type), ["OTHER"]);
+  assert.deepEqual(rd.invoiceAdjustments, []);
+  assert.equal(client.invoiceAdjustments.length, 2);
+});

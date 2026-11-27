@@ -100,14 +100,25 @@ function planIndexForPayment(payment, plans) {
   return i >= 0 ? i : 0;
 }
 
+// A service billed as its own plan (plan.service) replaces the hand-entered adjustment billing
+// used for it before ("Removal Defense", "Derivative add-on" on the Invoice section); the
+// first plan's view leaves those adjustments out so the service is not counted twice.
+const SERVICE_ADJUSTMENT_TYPE = { "Removal defense": "REMOVAL_DEFENSE", Derivative: "DERIVATIVE_ADD_ON" };
+function adjustmentsWithoutPlannedServices(client, plans) {
+  const list = Array.isArray(client.invoiceAdjustments) ? client.invoiceAdjustments : [];
+  const covered = new Set(plans.map((p) => SERVICE_ADJUSTMENT_TYPE[p.service]).filter(Boolean));
+  return covered.size ? list.filter((a) => !covered.has(String(a?.type || "").toUpperCase())) : list;
+}
+
 function planViews(client) {
   const plans = sortedPlans(client);
   if (plans.length <= 1) return [client];
   const buckets = plans.map(() => []);
   for (const p of client.payments || []) buckets[planIndexForPayment(p, plans)].push(p);
+  const firstAdjustments = adjustmentsWithoutPlannedServices(client, plans);
   return plans.map((plan, i) => {
     const base = {
-      ...client, planIndex: i, planCount: plans.length,
+      ...client, invoiceAdjustments: firstAdjustments, planIndex: i, planCount: plans.length,
       planInvoiceId: String(plan.invoiceId), planInvoiceNumber: plan.invoiceNumber || "",
       plans: [plan], // a view is single-plan
       payments: buckets[i],
@@ -136,7 +147,9 @@ function viewForInvoice(client, invoiceId) {
  * invoice: mirror invoice { id, number, total, dueDate }. Returns the new plans array.
  * Throws with a message billing can act on.
  */
-function plansWithNewInvoice(client, invoice, { monthlyAmount, startDate } = {}) {
+const MAIN_SERVICE = "Main case";
+
+function plansWithNewInvoice(client, invoice, { monthlyAmount, startDate, service } = {}) {
   const existing = Array.isArray(client.plans) ? client.plans.filter(Boolean) : [];
   // A client created from intake has no plan yet: this invoice becomes its first one.
   // So is one marked "paid in full, no plan needed" that later gets an installment invoice.
@@ -154,6 +167,8 @@ function plansWithNewInvoice(client, invoice, { monthlyAmount, startDate } = {})
   return [...existing, {
     invoiceId: String(invoice.id), invoiceNumber: invoice.number || "", total: Number(invoice.total || 0),
     monthlyAmount: monthly, startDate: start,
+    // Which service this plan pays for (e.g. "Removal defense"); the main case has none.
+    ...(service && service !== MAIN_SERVICE ? { service: String(service) } : {}),
   }];
 }
 

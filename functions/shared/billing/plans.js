@@ -142,13 +142,23 @@ const HORIZON_MONTHS = 240; // far enough that the plan always ends by its total
 // date before any real payment.
 const NO_DOWN_PAYMENT = "1900-01-01";
 
+// A service billed as its own plan (plan.service) replaces the hand-entered adjustment billing
+// used for it before ("Removal Defense", "Derivative add-on" on the Invoice section); the
+// first plan's view leaves those adjustments out so the service is not counted twice.
+const SERVICE_ADJUSTMENT_TYPE = { "Removal defense": "REMOVAL_DEFENSE", Derivative: "DERIVATIVE_ADD_ON" };
+function adjustmentsWithoutPlannedServices(client, plans) {
+  const list = Array.isArray(client.invoiceAdjustments) ? client.invoiceAdjustments : [];
+  const covered = new Set(plans.map((p) => SERVICE_ADJUSTMENT_TYPE[p.service]).filter(Boolean));
+  return covered.size ? list.filter((a) => !covered.has(String(_optionalChain([a, 'optionalAccess', _5 => _5.type]) || "").toUpperCase())) : list;
+}
+
 /**
  * Which plan a recorded payment belongs to: its invoice's plan if it has one;
  * otherwise the first plan (initial payments, hand-entered payments, other invoices).
  */
  function planIndexForPayment(payment, plans) {
-  if (_optionalChain([payment, 'optionalAccess', _5 => _5.kind]) === "initial") return 0;
-  const i = plans.findIndex((p) => String(p.invoiceId) === String(_nullishCoalesce(_optionalChain([payment, 'optionalAccess', _6 => _6.invoiceId]), () => ( ""))));
+  if (_optionalChain([payment, 'optionalAccess', _6 => _6.kind]) === "initial") return 0;
+  const i = plans.findIndex((p) => String(p.invoiceId) === String(_nullishCoalesce(_optionalChain([payment, 'optionalAccess', _7 => _7.invoiceId]), () => ( ""))));
   return i >= 0 ? i : 0;
 } exports.planIndexForPayment = planIndexForPayment;
 
@@ -164,9 +174,11 @@ const NO_DOWN_PAYMENT = "1900-01-01";
   const buckets = plans.map(() => []);
   for (const p of client.payments || []) buckets[planIndexForPayment(p, plans)].push(p);
 
+  const firstAdjustments = adjustmentsWithoutPlannedServices(client, plans);
   return plans.map((plan, i) => {
     const base = {
       ...client,
+      invoiceAdjustments: firstAdjustments,
       planIndex: i,
       planCount: plans.length,
       planInvoiceId: String(plan.invoiceId),
@@ -203,8 +215,8 @@ const EARLIEST = /oldest|first/i;
 const LATEST = /^last|latest/i;
 
 function severity(s) {
-  const missed = Number(_nullishCoalesce(_nullishCoalesce(_optionalChain([s, 'optionalAccess', _7 => _7.missedMonths]), () => ( _optionalChain([s, 'optionalAccess', _8 => _8.computedMissedMonths]))), () => ( 0))) || 0;
-  const due = Number(_nullishCoalesce(_nullishCoalesce(_optionalChain([s, 'optionalAccess', _9 => _9.amountDue]), () => ( _optionalChain([s, 'optionalAccess', _10 => _10.computedAmountDue]))), () => ( 0))) || 0;
+  const missed = Number(_nullishCoalesce(_nullishCoalesce(_optionalChain([s, 'optionalAccess', _8 => _8.missedMonths]), () => ( _optionalChain([s, 'optionalAccess', _9 => _9.computedMissedMonths]))), () => ( 0))) || 0;
+  const due = Number(_nullishCoalesce(_nullishCoalesce(_optionalChain([s, 'optionalAccess', _10 => _10.amountDue]), () => ( _optionalChain([s, 'optionalAccess', _11 => _11.computedAmountDue]))), () => ( 0))) || 0;
   return missed * 1e9 + due;
 }
 

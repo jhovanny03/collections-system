@@ -97,6 +97,15 @@ function createFirestoreStore(db) {
           // Records created from MyCase follow MyCase: case type (practice area) and, while
           // no plan is set, the flat fee as the total.
           const only = tracked.length === 1 ? tracked[0] : null;
+          // Where the case is in MyCase (e.g. "Prima Facie Received"), shown on the client.
+          if (only) {
+            const k = s.data();
+            const stage = k.caseStage || null;
+            const st = k.status || null;
+            if ((only.mycaseStage || null) !== stage || (only.mycaseCaseStatus || null) !== st) {
+              batch.update(db.collection("clients").doc(only.id), { mycaseStage: stage, mycaseCaseStatus: st });
+            }
+          }
           if (only && only.source === "mycase") {
             const upd = {};
             const type = caseTypeFromMyCase(s.data().practiceArea);
@@ -226,6 +235,76 @@ function createFirestoreStore(db) {
         if (writes) await batch.commit();
       });
       return { clients: updated, withPayments };
+    },
+
+    /**
+     * New invoices on existing clients, flagged as soon as they appear in MyCase (before
+     * any payment): an invoice on a tagged client's case that is not tagged yet becomes a
+     * "new_invoice" item on MyCase Review (doc id newinv_<invoiceId>, created once).
+     * Billing then says what it is and which service it is for (e.g. a removal defense:
+     * its initial invoice and its monthly invoice, which becomes a plan of its own).
+     * Open items whose invoice got tagged elsewhere (Case Setup) are closed.
+     * Returns { flagged, closed, candidates } (dryRun: nothing written).
+     */
+    async flagNewInvoices({ caseIds = [], all = false, dryRun = false } = {}) {
+      const { isConsultFee, defaultInvoiceRole } = require("./mycaseSync");
+      const byCase = await store.loadClientsByCaseId();
+      const eligible = (id) => {
+        const list = byCase.get(id) || [];
+        if (list.length !== 1) return false;
+        const c = list[0];
+        return !!(c.invoiceRoles && Object.keys(c.invoiceRoles).length) && !(c.rebuild && c.rebuild.status === "needs_tagging") && String(c.status || "active").toLowerCase() !== "closed";
+      };
+      const wanted = (all ? [...byCase.keys()] : [...new Set(caseIds.map(String))]).filter(eligible);
+      const invByCase = new Map();
+      await inChunks(wanted, 30, async (ids) => {
+        (await db.collection(MIRROR.invoices).where("caseId", "in", ids).get()).forEach((d) => {
+          const inv = d.data();
+          if (!invByCase.has(inv.caseId)) invByCase.set(inv.caseId, []);
+          invByCase.get(inv.caseId).push(inv);
+        });
+      });
+      const candidates = [];
+      for (const caseId of wanted) {
+        const c = byCase.get(caseId)[0];
+        for (const inv of invByCase.get(caseId) || []) {
+          if (inv.status === "draft" || !(Number(inv.total) > 0) || isConsultFee(inv) || c.invoiceRoles[String(inv.id)]) continue;
+          candidates.push({ c, inv, caseId });
+        }
+      }
+      let flagged = 0;
+      await inChunks(candidates, 300, async (chunk) => {
+        const refs = chunk.map((x) => db.collection(REVIEW_COLLECTION).doc(`newinv_${x.inv.id}`));
+        const snaps = await db.getAll(...refs);
+        const batch = db.batch();
+        let writes = 0;
+        snaps.forEach((s, k) => {
+          if (s.exists) return;
+          const { c, inv, caseId } = chunk[k];
+          flagged++;
+          if (dryRun) return;
+          batch.set(s.ref, {
+            status: "open", reason: "new_invoice", createdAt: new Date().toISOString(),
+            caseId, invoiceId: String(inv.id), invoiceNumber: inv.number || "", amount: Number(inv.total || 0), paid: Number(inv.paid || 0),
+            invoiceDate: inv.invoiceDate || null, paymentDate: inv.invoiceDate || null, description: inv.description || "",
+            suggestedRole: defaultInvoiceRole(inv) || null,
+            clientId: c.id, mycaseClientName: `${c.firstName || ""} ${c.lastName || ""}`.trim() || c.name || "",
+          });
+          writes++;
+        });
+        if (writes) await batch.commit();
+      });
+      // Tagged elsewhere since it was flagged: close it.
+      let closed = 0;
+      const open = await db.collection(REVIEW_COLLECTION).where("reason", "==", "new_invoice").where("status", "==", "open").get();
+      for (const d of open.docs) {
+        const it = d.data();
+        const c = (byCase.get(String(it.caseId)) || [])[0];
+        if (!c || !(c.invoiceRoles || {})[String(it.invoiceId)]) continue;
+        closed++;
+        if (!dryRun) await d.ref.update({ status: "resolved", resolution: "invoice_tagged", resolvedAt: new Date().toISOString(), taggedAs: c.invoiceRoles[String(it.invoiceId)] });
+      }
+      return { flagged, closed, candidates: candidates.length };
     },
 
     /** Recompute the prepared figures pages read (functions/portfolioSnapshot.js). */
@@ -474,7 +553,7 @@ async function retryCaseReviews(db, caseId) {
  * a client created from intake that is waiting for its plan, it adds the plan to that
  * record. Either way the case's payment history is imported under the invoice tags.
  */
-async function setupCase(db, { caseId, roles, plans, by }) {
+async function setupCase(db, { caseId, roles, plans, by, services = {} }) {
   const store = createFirestoreStore(db);
   const caseRef = db.collection(MIRROR.cases).doc(String(caseId));
   const caseSnap = await caseRef.get();
@@ -484,7 +563,7 @@ async function setupCase(db, { caseId, roles, plans, by }) {
   if (tracked.length && !waiting) throw new Error("This case already has a Collections record.");
 
   const { invoices, payments } = await caseData(db, caseId);
-  const built = buildSetupClient({ caseDoc: caseSnap.data(), invoices, roles, plans, payments, by });
+  const built = withServices(buildSetupClient({ caseDoc: caseSnap.data(), invoices, roles, plans, payments, by }), services);
 
   let client;
   if (waiting) {
@@ -503,6 +582,22 @@ async function setupCase(db, { caseId, roles, plans, by }) {
   // Payments held while the new invoice was untagged are counted now: close their items.
   if (waiting) result.reviewsSettled = await retryCaseReviews(db, caseId);
   return result;
+}
+
+/**
+ * Which service each invoice is for ({ invoiceId: "Removal defense" }): stored on the
+ * client as invoiceServices and on that invoice's plan. "Main case" is the default and
+ * is not stored.
+ */
+function withServices(fields, services) {
+  const clean = {};
+  for (const [inv, svc] of Object.entries(services || {})) if (svc && svc !== "Main case") clean[String(inv)] = String(svc);
+  if (!Object.keys(clean).length) return fields;
+  return {
+    ...fields,
+    invoiceServices: { ...(fields.invoiceServices || {}), ...clean },
+    ...(Array.isArray(fields.plans) ? { plans: fields.plans.map((p) => (p && clean[String(p.invoiceId)] ? { ...p, service: clean[String(p.invoiceId)] } : p)) } : {}),
+  };
 }
 
 /* --------------------------- tag & rebuild (existing) --------------------------- */
@@ -557,7 +652,7 @@ async function writeRebuild(db, clientId, result) {
  * Billing tags every invoice of an EXISTING client's case (and enters the amount for any
  * extra installment plan); the client's payment history is rebuilt from the MyCase mirror.
  */
-async function retagCase(db, { caseId, roles, plans, by }) {
+async function retagCase(db, { caseId, roles, plans, by, services = {} }) {
   assertRebuildDatabase(db);
   const { rebuildClient } = require("./rebuildClient");
   const caseRef = db.collection(MIRROR.cases).doc(String(caseId));
@@ -583,10 +678,15 @@ async function retagCase(db, { caseId, roles, plans, by }) {
     client: { id: clientId, ...clientSnap.data(), mycaseCaseId: String(caseId) },
     roles: cleanRoles, invoices, payments, extraPlans: plans || [],
   });
+  result.client = withServices(result.client, services);
   result.client.invoiceUpdatedAt = new Date().toISOString();
   result.client.invoiceUpdatedBy = by || "Tagging";
   await writeRebuild(db, clientId, result);
   await caseRef.set({ needsTagging: false }, { merge: true });
+  // Close review items the new tags settle, and refresh the case's flags.
+  const store = createFirestoreStore(db);
+  await retryCaseReviews(db, caseId);
+  await store.refreshCases([String(caseId)], await store.loadClientsByCaseId());
   return { clientId, ...result.stats };
 }
 
@@ -596,7 +696,7 @@ async function retagCase(db, { caseId, roles, plans, by }) {
  * Re-run one review item, e.g. after someone fixed the client's myCaseLink.
  * Returns { status: "resolved" | "open", detail }.
  */
-async function retryReviewItem(db, reviewId) {
+async function retryReviewItem(db, reviewId, byEmail = null) {
   const ref = db.collection(REVIEW_COLLECTION).doc(reviewId);
   const snap = await ref.get();
   if (!snap.exists) throw new Error("Review item not found");
@@ -604,16 +704,24 @@ async function retryReviewItem(db, reviewId) {
   if (item.status !== "open") return { status: item.status, detail: "already_handled" };
 
   const store = createFirestoreStore(db);
+  // A new invoice with no payment yet: done once its invoice is tagged (here or in Case Setup).
+  if (item.reason === "new_invoice" || !item.raw) {
+    const c = ((await store.loadClientsByCaseId()).get(String(item.caseId)) || [])[0];
+    const role = c && (c.invoiceRoles || {})[String(item.invoiceId)];
+    if (!role) return { status: "open", detail: "new_invoice" };
+    await ref.update({ status: "resolved", resolution: "invoice_tagged", resolvedAt: new Date().toISOString(), resolvedBy: byEmail, taggedAs: role, clientId: c.id });
+    return { status: "resolved", detail: "invoice_tagged" };
+  }
   const decision = classifyPayment(item.raw, await store.loadClientsByCaseId());
   if (decision.action === "ignore") {
     // e.g. the invoice was tagged "other": nothing to import, so the item is done.
-    await ref.update({ status: "resolved", resolution: `not_counted_${decision.reason}`, resolvedAt: new Date().toISOString() });
+    await ref.update({ status: "resolved", resolution: `not_counted_${decision.reason}`, resolvedAt: new Date().toISOString(), resolvedBy: byEmail, clientId: decision.client ? decision.client.id : item.clientId || null });
     return { status: "resolved", detail: decision.reason };
   }
   if (decision.action === "reverse") {
     const r = await store.reversePayment(decision.client, item.raw);
     if (r !== "cancelled") return { status: "open", detail: "no_matching_payment_to_reverse" };
-    await ref.update({ status: "resolved", resolution: "reversal_applied", resolvedAt: new Date().toISOString() });
+    await ref.update({ status: "resolved", resolution: "reversal_applied", resolvedAt: new Date().toISOString(), resolvedBy: byEmail, clientId: decision.client.id });
     return { status: "resolved", detail: "reversal_applied" };
   }
   if (decision.action !== "import") {
@@ -625,14 +733,25 @@ async function retryReviewItem(db, reviewId) {
       status: "resolved",
       resolution: outcome === "imported" ? "imported_on_retry" : "already_in_ledger",
       resolvedAt: new Date().toISOString(),
+      // For the "Resolved" tab: where the payment went, and as what.
+      resolvedBy: byEmail,
+      clientId: decision.client.id,
+      countedAs: decision.kind,
     });
     return { status: "resolved", detail: outcome };
   }
   return { status: "open", detail: outcome };
 }
 
-/** Tag the invoice behind an "untagged_invoice" item on its client, then retry it. */
-async function tagReviewItem(db, reviewId, role, byEmail, plan) {
+/**
+ * Tag the invoice behind a review item ("untagged_invoice": a payment on an untagged
+ * invoice; "new_invoice": a new invoice on an existing client, before any payment) and
+ * settle every payment on it.
+ * Guardrail: when the client already has an initial invoice or a plan, billing must say
+ * which service this invoice is for (`service`), so an additional service's invoice
+ * (removal defense, derivative...) is never filed as the main case's by accident.
+ */
+async function tagReviewItem(db, reviewId, role, byEmail, plan, service = null) {
   if (!ROLES.includes(role)) throw new Error("Unknown invoice type.");
   const snap = await db.collection(REVIEW_COLLECTION).doc(reviewId).get();
   if (!snap.exists) throw new Error("Review item not found");
@@ -642,18 +761,24 @@ async function tagReviewItem(db, reviewId, role, byEmail, plan) {
   const clients = (await createFirestoreStore(db).loadClientsByCaseId()).get(String(item.caseId)) || [];
   if (clients.length !== 1) throw new Error("Could not find exactly one client for this case.");
   const client = clients[0];
+  const roles = client.invoiceRoles || {};
+  const hasMain = Object.values(roles).some((r) => r === "initial" || r === "installment") || (client.plans || []).length > 0;
+  if (role !== "other" && hasMain && !service) {
+    throw new Error("This client already has an initial payment or a plan. Choose which service this invoice is for (Main case, Removal defense, Derivative...).");
+  }
 
   const updates = {
     [`invoiceRoles.${invoiceId}`]: role,
     invoiceUpdatedAt: new Date().toISOString(),
     invoiceUpdatedBy: byEmail || "Review",
   };
+  if (service) updates[`invoiceServices.${invoiceId}`] = service;
   if (role === "installment") {
     // A new installment invoice is its own plan, with its own monthly amount and start,
     // so its payments count toward it and not toward the existing plan.
     const invSnap = await db.collection(MIRROR.invoices).doc(String(invoiceId)).get();
     if (!invSnap.exists) throw new Error("This invoice is not in the MyCase mirror yet; try again after the next sync.");
-    updates.plans = plansWithNewInvoice(client, invSnap.data(), plan || {});
+    updates.plans = plansWithNewInvoice(client, invSnap.data(), { ...(plan || {}), service });
     if (updates.plans.length === 1) Object.assign(updates, firstPlanFields(client, updates.plans[0]));
   }
   await db.collection("clients").doc(client.id).update(updates);
@@ -669,12 +794,25 @@ async function tagReviewItem(db, reviewId, role, byEmail, plan) {
     .sort((a, b) => String(a.data().paymentDate).localeCompare(String(b.data().paymentDate)));
   let resolved = 0;
   let clicked = { status: "open", detail: "untagged_invoice" };
+  // The "new invoice" item(s) for this invoice are done once it is tagged.
+  const at = new Date().toISOString();
+  const flagged = (await db.collection(REVIEW_COLLECTION).where("invoiceId", "==", String(invoiceId)).where("status", "==", "open").get()).docs
+    .filter((d) => d.data().reason === "new_invoice");
+  for (const d of flagged) {
+    await d.ref.update({ status: "resolved", resolution: "invoice_tagged", resolvedAt: at, resolvedBy: byEmail || null, taggedAs: role, taggedBy: byEmail || null, service: service || null, clientId: client.id });
+  }
   for (const d of siblings) {
-    const r = await retryReviewItem(db, d.id);
+    await d.ref.update({ taggedAs: role, taggedBy: byEmail || null, service: service || null });
+    const r = await retryReviewItem(db, d.id, byEmail);
     if (r.status === "resolved") resolved++;
     if (d.id === reviewId) clicked = r;
   }
-  if (!siblings.some((d) => d.id === reviewId)) clicked = await retryReviewItem(db, reviewId);
+  if (item.reason === "new_invoice") clicked = { status: "resolved", detail: "invoice_tagged" };
+  else if (!siblings.some((d) => d.id === reviewId)) clicked = await retryReviewItem(db, reviewId, byEmail);
+  // The tag changes what the case owes (e.g. a second initial invoice): refresh its flags
+  // now so Initial payments and Case Setup show it without waiting for the next sync.
+  const store = createFirestoreStore(db);
+  await store.refreshCases([String(item.caseId)], await store.loadClientsByCaseId());
   return { ...clicked, paymentsSettled: resolved };
 }
 

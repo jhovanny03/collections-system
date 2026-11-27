@@ -1,11 +1,14 @@
 // src/Reports/FollowUpsReport.jsx
-// How follow-ups and promises are working, month by month.
+// How follow-ups and promises are working, month by month. Promise counts come from the
+// prepared figures (promiseMonths: every promise in the client notes, kept = paid the amount
+// by 3 days after its date: src/billing/callPriority.js).
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Chip, LinearProgress, Table, TableBody, TableCell, TableHead, TableRow, TableContainer, Typography } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { BarChart } from "@mui/x-charts/BarChart";
-import { collection, getDocs, query, orderBy, limit } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import db from "../firebase";
+import { useBook } from "../data/BookProvider";
 import { monthLabel, money, pct } from "../billing/portfolio";
 import { chartColors } from "../theme/brand";
 import { StatCard, Section, Tiles, Empty } from "../ui/kit";
@@ -28,7 +31,7 @@ export default function FollowUpsReport() {
   const theme = useTheme();
   const colors = chartColors(theme.palette.mode);
   const [months, setMonths] = useState(null);
-  const [promises, setPromises] = useState([]);
+  const { promiseMonths } = useBook();
 
   useEffect(() => {
     let alive = true;
@@ -49,22 +52,12 @@ export default function FollowUpsReport() {
           amount: main.reduce((t, i) => t + Number(i.amountDueCurrentMonth || 0), 0),
           contacted: main.filter(contacted).length,
           reached: main.filter(reached).length,
-          promised: main.filter((i) => i.status === "Promise").length,
           paid: main.filter(isPaid).length,
           paidUnlogged: main.filter((i) => i.resolvedReason === "paid_mycase").length,
           reasons,
         });
       }
-      let pr = [];
-      try {
-        pr = (await getDocs(query(collection(db, "paymentPromises"), orderBy("createdAt", "desc"), limit(1000)))).docs.map((d) => d.data());
-      } catch (e) {
-        /* collection may not exist yet */
-      }
-      if (alive) {
-        setMonths(out);
-        setPromises(pr);
-      }
+      if (alive) setMonths(out);
     })().catch((e) => {
       console.error(e);
       if (alive) setMonths([]);
@@ -82,11 +75,9 @@ export default function FollowUpsReport() {
     const sum = Object.values(total).reduce((a, b) => a + b, 0) || 1;
     return Object.entries(total).map(([r, n]) => ({ reason: REASONS[r] || r, n, share: n / sum })).sort((a, b) => b.n - a.n);
   }, [months]);
-  const promiseStats = useMemo(() => {
-    const done = promises.filter((p) => p.status === "kept" || p.status === "broken");
-    const kept = done.filter((p) => p.status === "kept");
-    return { total: promises.length, open: promises.filter((p) => p.status === "open").length, kept: kept.length, rate: done.length ? kept.length / done.length : null, keptAmount: kept.reduce((t, p) => t + Number(p.paidAmount || 0), 0) };
-  }, [promises]);
+  const pm = (id) => (promiseMonths && promiseMonths[id]) || null;
+  const latestPm = latest ? pm(latest.id) : null;
+  const latestDecided = latestPm ? latestPm.kept + latestPm.broken : 0;
 
   if (!months) return <LinearProgress />;
   if (!months.length) return <Empty title="No follow-up lists yet">The first list is built on the 16th at 9 AM.</Empty>;
@@ -97,7 +88,7 @@ export default function FollowUpsReport() {
         <StatCard label={`Listed in ${latest.label}`} value={latest.listed} sub={`${money(latest.amount)} missed · ${latest.behind} more already behind`} />
         <StatCard label="Contacted" value={pct(latest.contacted / Math.max(1, latest.listed))} sub={`${latest.contacted} of ${latest.listed} called at least once`} tone={latest.contacted / Math.max(1, latest.listed) >= 0.8 ? "good" : "warn"} />
         <StatCard label="Paid since the list" value={pct(latest.paid / Math.max(1, latest.listed))} sub={`${latest.paid} clients${latest.paidUnlogged ? ` (${latest.paidUnlogged} in MyCase, not logged)` : ""}`} tone="good" />
-        <StatCard label="Promises kept" value={pct(promiseStats.rate)} sub={promiseStats.total ? `${promiseStats.kept} kept · ${promiseStats.open} open · ${money(promiseStats.keptAmount)} paid` : "Tracked from now on (checked nightly)"} />
+        <StatCard label={latest ? `Promises kept in ${latest.label}` : "Promises kept"} value={latestDecided ? pct(latestPm.kept / latestDecided) : "—"} sub={latestPm ? `${latestPm.kept} of ${latestDecided} kept${latestPm.open ? ` · ${latestPm.open} open` : ""} · ${money(latestPm.keptAmount)} paid` : "Shows after the next refresh"} tone={latestDecided && latestPm.kept / latestDecided >= 0.5 ? "good" : "warn"} />
       </Tiles>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "3fr 2fr" }, mb: 3 }}>
@@ -142,7 +133,7 @@ export default function FollowUpsReport() {
         </Section>
       </Box>
 
-      <Section title="Month by month" pad={false}>
+      <Section title="Month by month" subtitle="Promised: clients on that list who promised to pay that month. Promises kept: all promises due that month, paid by 3 days after the date." pad={false}>
         <TableContainer>
           <Table size="small">
             <TableHead>
@@ -153,6 +144,7 @@ export default function FollowUpsReport() {
                 <TableCell align="right">Contacted</TableCell>
                 <TableCell align="right">Reached</TableCell>
                 <TableCell align="right">Promised</TableCell>
+                <TableCell align="right">Promises kept</TableCell>
                 <TableCell align="right">Paid</TableCell>
                 <TableCell align="right">Already behind</TableCell>
               </TableRow>
@@ -165,7 +157,8 @@ export default function FollowUpsReport() {
                   <TableCell align="right">{money(m.amount)}</TableCell>
                   <TableCell align="right">{m.contacted} <Chip size="small" label={pct(m.contacted / Math.max(1, m.listed))} sx={{ ml: 0.5 }} /></TableCell>
                   <TableCell align="right">{m.reached}</TableCell>
-                  <TableCell align="right">{m.promised}</TableCell>
+                  <TableCell align="right">{pm(m.id) ? pm(m.id).listMade : "—"}</TableCell>
+                  <TableCell align="right">{pm(m.id) && pm(m.id).kept + pm(m.id).broken ? `${pm(m.id).kept} of ${pm(m.id).kept + pm(m.id).broken}` : "—"}</TableCell>
                   <TableCell align="right">{m.paid}</TableCell>
                   <TableCell align="right">{m.behind || "—"}</TableCell>
                 </TableRow>

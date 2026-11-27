@@ -252,9 +252,14 @@ export function monthMoneySplit(client, asOf = new Date()) {
 
 /** Installment money (no initial payments) received between two dates, all plans. */
 export function installmentPaidBetween(client, from, to) {
-  let s = 0;
-  for (const v of planViews(client)) s += installmentPayments(v, to).filter((p) => p.date >= from).reduce((t, p) => t + p.amount, 0);
-  return s;
+  return installmentPaymentsBetween(client, from, to).reduce((t, p) => t + p.amount, 0);
+}
+
+/** The installment parts of a client's payments (all plans) made between `from` and `to`. */
+export function installmentPaymentsBetween(client, from, to) {
+  const out = [];
+  for (const v of planViews(client)) for (const p of installmentPayments(v, to)) if (p.date >= from) out.push(p);
+  return out;
 }
 
 /** Accountant aging buckets, by days since the 1st of the installment's month. */
