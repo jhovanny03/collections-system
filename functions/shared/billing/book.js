@@ -37,6 +37,11 @@ const isInitialPayment = (c, p, d) => {
   const init = _dates.parseDate.call(void 0, c.initialPaymentDate);
   return !!(init && d && d <= init && !p.kind);
 };
+// Removal defense: its own case (case type or MyCase practice area), or a removal-defense
+// service added to an existing client (the invoice's service tag). Its initial payment is
+// often sold outside the intake team, so Home shows it apart.
+ const isRemovalDefense = (c, p) => /removal\s*defen[cs]e/i.test(String(((c && c.invoiceServices) || {})[String((p && p.invoiceId) || "")] || ""))
+  || /^removal\s*defen[cs]e/i.test(String((c && c.caseType) || "")) || /^removal\s*defen[cs]e/i.test(String((c && c.mycasePracticeArea) || "")); exports.isRemovalDefense = isRemovalDefense;
 const isMyCasePayment = (p) => String(p.paymentId || "").startsWith("mycase_") || p.source === "mycase" || p.recordedBy === "MyCase sync";
 
 /** Every received payment on every client, flattened (newest first). */
@@ -55,6 +60,7 @@ const isMyCasePayment = (p) => String(p.paymentId || "").startsWith("mycase_") |
         ymd: exports.ymdOf.call(void 0, d),
         ym: exports.ymOf.call(void 0, d),
         initial: isInitialPayment(c, p, d),
+        removalDefense: exports.isRemovalDefense.call(void 0, c, p),
         fromMyCase: isMyCasePayment(p),
         recordedBy: p.recordedBy || (isMyCasePayment(p) ? "MyCase sync" : "—"),
         recordedAt: _dates.parseDate.call(void 0, p.recordedAt),
@@ -261,6 +267,8 @@ function lastInstallment(c) {
       // Where this month's money went: initial payments, this month's installments
       // (clients up to date going in), and the rest (catch-up on older months / paid ahead).
       mtdInitial: sum(mtd.filter((p) => p.initial)),
+      mtdInitialRemoval: sum(mtd.filter((p) => p.initial && p.removalDefense)),
+      mtdInitialRemovalCount: mtd.filter((p) => p.initial && p.removalDefense).length,
       mtdThisMonth: collectedOnPlan,
       mtdCatchUp: Math.max(0, sum(mtd) - sum(mtd.filter((p) => p.initial)) - collectedOnPlan),
     },
@@ -307,12 +315,13 @@ function lastInstallment(c) {
  function collectionsByMonth(payments, n = 12, asOf = new Date()) {
   const keys = [];
   for (let i = n - 1; i >= 0; i--) keys.push(exports.ymOf.call(void 0, new Date(asOf.getFullYear(), asOf.getMonth() - i, 1)));
-  const map = new Map(keys.map((k) => [k, { key: k, label: exports.monthLabel.call(void 0, k), installments: 0, initial: 0, total: 0, count: 0 }]));
+  const map = new Map(keys.map((k) => [k, { key: k, label: exports.monthLabel.call(void 0, k), installments: 0, initial: 0, initialRemoval: 0, total: 0, count: 0 }]));
   for (const p of payments) {
     const m = map.get(p.ym);
     if (!m || p.amount <= 0) continue;
     if (p.initial) m.initial += p.amount;
     else m.installments += p.amount;
+    if (p.initial && p.removalDefense) m.initialRemoval += p.amount;
     m.total += p.amount;
     m.count++;
   }

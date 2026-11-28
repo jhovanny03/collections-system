@@ -35,7 +35,7 @@ const STATES = {
   client: { label: "In Collections, initial open", short: "in Collections", color: "#D34E24", word: "still due" },
 };
 const CHIPS = [
-  ["all", "All"], ["client", "In Collections"], ["started", "Started paying"], ["notStarted", "Nothing paid"], ["old", "90+ days"],
+  ["all", "All"], ["client", "In Collections"], ["started", "Started paying"], ["notStarted", "Nothing paid"], ["old", "90+ days"], ["removal", "Removal defense"],
 ];
 const SORTS = { oldest: "Oldest first", due: "Most still due", newest: "Newest first" };
 
@@ -117,6 +117,9 @@ export default function InitialPayments() {
         // An additional service's initial payment (removal defense, derivative...).
         service: k.initialService || null,
         caseType: (c?.caseType && c.caseType !== "—" ? c.caseType : "") || k.practiceArea || "",
+        // Removal defense (its own case, or the service added to a client): often sold
+        // outside the intake team, so it is marked and can be filtered.
+        removal: /removal\s*defen[cs]e/i.test(String(k.initialService || "")) || /^removal\s*defen[cs]e/i.test(String(c?.caseType || "")) || /^removal\s*defen[cs]e/i.test(String(k.practiceArea || "")),
         total: Number(k.initialTotal || 0),
         paid: Number(k.initialPaid || 0),
         due: Number(k.initialDue || 0),
@@ -146,7 +149,7 @@ export default function InitialPayments() {
     const q = search.trim().toLowerCase();
     const out = rows.filter(
       (r) =>
-        (chip === "all" || (chip === "old" ? (r.days ?? 0) > 90 : r.state === chip)) &&
+        (chip === "all" || (chip === "old" ? (r.days ?? 0) > 90 : chip === "removal" ? r.removal : r.state === chip)) &&
         (!q || r.name.toLowerCase().includes(q) || r.caseName.toLowerCase().includes(q))
     );
     out.sort((a, b) => (sort === "due" ? b.due - a.due : sort === "newest" ? (a.days ?? 1e9) - (b.days ?? 1e9) : (b.days ?? -1) - (a.days ?? -1)));
@@ -218,7 +221,7 @@ export default function InitialPayments() {
               InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded fontSize="small" /></InputAdornment> }} />
             <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
               {CHIPS.map(([k, l]) => (
-                <Chip key={k} size="small" label={l} onClick={() => setChip(k)} color={chip === k ? "primary" : "default"} variant={chip === k ? "filled" : "outlined"} sx={{ fontWeight: 800 }} />
+                <Chip key={k} size="small" label={k === "removal" ? `${l} · ${rows.filter((r) => r.removal).length}` : l} onClick={() => setChip(k)} color={chip === k ? "primary" : "default"} variant={chip === k ? "filled" : "outlined"} sx={{ fontWeight: 800 }} />
               ))}
             </Stack>
             <TextField size="small" select value={sort} onChange={(e) => setSort(e.target.value)} sx={{ width: 150 }}>
@@ -248,6 +251,7 @@ export default function InitialPayments() {
                     <Typography variant="body2" fontWeight={800} noWrap title={r.caseName}>{r.name}</Typography>
                   )}
                   <Typography variant="caption" color="text.secondary" noWrap component="div" title={r.caseName}>
+                    {r.removal && <Box component="span" sx={{ mr: 0.75, px: 0.75, py: "1px", borderRadius: 99, bgcolor: alpha("#7B4BC4", 0.12), color: "#7B4BC4", fontWeight: 800 }}>Removal defense</Box>}
                     {[r.caseType, r.service, STATES[r.state]?.short, r.createdBy ? `by ${r.createdBy}` : null].filter(Boolean).join(" · ")}
                   </Typography>
                 </Box>

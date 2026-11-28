@@ -34,3 +34,12 @@ test("batches stay under the size limit and keep every row", () => {
   assert.equal(b.flat().length, 50);
   b.forEach((x) => assert.ok(JSON.stringify(x).length <= 1300));
 });
+
+test("removal-defense initial payments are told apart (case type, practice area or service)", () => {
+  const { isRemovalDefense } = require("./shared/billing/book");
+  assert.equal(isRemovalDefense({ caseType: "REMOVAL DEFENSE" }, {}), true);
+  assert.equal(isRemovalDefense({ caseType: "", mycasePracticeArea: "Removal Defense - Asylum" }, {}), true);
+  assert.equal(isRemovalDefense({ caseType: "VAWA SPOUSE", invoiceServices: { 77: "Removal defense" } }, { invoiceId: "77" }), true);
+  assert.equal(isRemovalDefense({ caseType: "VAWA SPOUSE", invoiceServices: { 77: "Removal defense" } }, { invoiceId: "78" }), false);
+  assert.equal(isRemovalDefense({ caseType: "MARRIAGE AOS", mycasePracticeArea: "Marriage AOS During Removal" }, {}), false);
+});

@@ -38,7 +38,12 @@ function extras(c) {
 function computeSnapshot(clientDocs, now = new Date(), { listMonths = new Map(), calls = [], cases = new Map(), moneyBack = new Map(), aiTags = new Map() } = {}) {
   const { clientRows, summarize, allPayments, collectionRateByMonth, collectionsByMonth, planMoneyByDay } = require("./shared/billing/book");
   const { withMyCasePayments } = require("./shared/billing/mycaseOverlay");
-  const clients = clientDocs.map((c) => withMyCasePayments(c));
+  const { caseIdOf: caseOf } = require("./shared/billing/mycaseOverlay");
+  // The MyCase practice area tells removal-defense cases apart (Home: initial payments).
+  const clients = clientDocs.map((c) => {
+    const kase = cases.get(String(caseOf(c) || ""));
+    return withMyCasePayments(kase && kase.practiceArea ? { ...c, mycasePracticeArea: kase.practiceArea } : c);
+  });
   const rows = clientRows(clients, now);
   const byId = new Map(clients.map((c) => [c.id, c]));
   rows.forEach((r) => Object.assign(r, extras(byId.get(r.id) || {})));
@@ -133,11 +138,12 @@ function batchRows(rows, maxBytes = MAX_BATCH_BYTES) {
 }
 
 /** This month in MyCase: money received, and what landed on cases not in Collections. */
-async function mycaseMonth(db, docs, now) {
+async function mycaseMonth(db, docs, now, cases = new Map()) {
   const { isReceived, caseIdOf } = require("./shared/billing/mycaseOverlay");
   const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const tracked = new Set(docs.filter((c) => !c.mycaseExcluded).map(caseIdOf).filter(Boolean));
-  const out = { ym, received: 0, count: 0, notInApp: 0, notInAppCount: 0 };
+  const out = { ym, received: 0, count: 0, notInApp: 0, notInAppCount: 0, newCases: { amount: 0, count: 0, cases: 0, removal: 0 } };
+  const newCaseIds = new Set();
   const snap = await db.collection("mycasePayments").where("date", ">=", `${ym}-01`).select("caseId", "date", "amount", "status", "type").get();
   snap.forEach((d) => {
     const p = d.data();
@@ -147,8 +153,19 @@ async function mycaseMonth(db, docs, now) {
     if (!tracked.has(String(p.caseId || ""))) {
       out.notInApp += Number(p.amount);
       out.notInAppCount++;
+      // Intake money on a new case nobody has set up yet (opened within 180 days of the
+      // payment, a real client case): it counts as an initial payment once set up.
+      const kase = cases.get(String(p.caseId || ""));
+      const opened = kase && /^\d{4}-\d{2}-\d{2}$/.test(String(kase.openedDate || "")) ? new Date(`${kase.openedDate}T12:00:00`) : null;
+      if (kase && opened && kase.status !== "closed" && (kase.setupGroup || "client") === "client" && new Date(`${String(p.date).slice(0, 10)}T12:00:00`) - opened <= 180 * 864e5) {
+        out.newCases.amount += Number(p.amount);
+        out.newCases.count++;
+        newCaseIds.add(String(p.caseId));
+        if (/^removal\s*defen[cs]e/i.test(String(kase.practiceArea || ""))) out.newCases.removal += Number(p.amount);
+      }
     }
   });
+  out.newCases.cases = newCaseIds.size;
   return out;
 }
 
@@ -190,7 +207,7 @@ async function refreshPortfolio(db, { now = new Date(), by = "system" } = {}) {
   const moneyBack = new Map();
   const aiTags = new Map();
   try {
-    (await db.collection("mycaseCases").select("name", "status", "caseStage", "closedDate").get()).forEach((d) => cases.set(d.id, d.data()));
+    (await db.collection("mycaseCases").select("name", "status", "caseStage", "closedDate", "practiceArea", "openedDate", "setupGroup").get()).forEach((d) => cases.set(d.id, d.data()));
     const { moneyBackByCase } = require("./shared/billing/closeCheck");
     const neg = (await db.collection("mycasePayments").where("amount", "<", 0).select("caseId", "amount", "type", "status", "date").get()).docs.map((d) => d.data());
     moneyBackByCase(neg).forEach((v, k) => moneyBack.set(k, v));
@@ -208,7 +225,7 @@ async function refreshPortfolio(db, { now = new Date(), by = "system" } = {}) {
   await db.doc("portfolio/insights").set({ generatedAt, ...data.insights });
   let month = null;
   try {
-    month = await mycaseMonth(db, docs, now);
+    month = await mycaseMonth(db, docs, now, cases);
   } catch (e) {
     console.warn("MyCase month total skipped:", e.message);
   }

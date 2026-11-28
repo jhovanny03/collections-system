@@ -3,7 +3,7 @@
 // Permission helpers come from ./permissions so every page uses the same rules.
 import React, { createContext, useEffect, useMemo, useState, useCallback } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { authService } from "../services/authService";
+import { authService, isFirmEmail } from "../services/authService";
 import { auth, db } from "../firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import {
@@ -41,6 +41,8 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   // Set when a disabled account tries to sign in (shown on the login page).
   const [disabledNotice, setDisabledNotice] = useState(false);
+  // Set when a non-firm account is signed in (any sign-in method): it is signed out.
+  const [domainNotice, setDomainNotice] = useState(false);
 
   const register = useCallback((email, password) => authService.register(email, password), []);
   const login = useCallback((email, password) => {
@@ -48,7 +50,11 @@ export function AuthProvider({ children }) {
     return authService.login(email, password);
   }, []);
   const logout = useCallback(() => authService.logout(), []);
-  const loginWithGoogle = useCallback(() => authService.loginWithGoogle(), []);
+  const loginWithGoogle = useCallback(() => {
+    setDisabledNotice(false);
+    setDomainNotice(false);
+    return authService.loginWithGoogle();
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -59,6 +65,15 @@ export function AuthProvider({ children }) {
           return;
         }
         const email = (firebaseUser.email || "").toLowerCase();
+        // Firm accounts only: any other account (an old email/password login, a personal
+        // Google account) is signed out before anything is read or created for it.
+        if (!isFirmEmail(email)) {
+          setDomainNotice(true);
+          setActor(null);
+          setUser(null);
+          await authService.logout();
+          return;
+        }
         const isOwner = email === BYPASS_EMAIL.toLowerCase();
         const profileRef = doc(db, "users", firebaseUser.uid);
         const profileSnap = await getDoc(profileRef);
@@ -103,6 +118,7 @@ export function AuthProvider({ children }) {
       user,
       loading,
       disabledNotice,
+      domainNotice,
       register,
       login,
       logout,
@@ -115,7 +131,7 @@ export function AuthProvider({ children }) {
       isLeadOrHigher: () => isLeadOrHigherFn(user),
       canManageUsers: () => canManageUsersFn(user),
     }),
-    [user, loading, disabledNotice, register, login, logout, loginWithGoogle]
+    [user, loading, disabledNotice, domainNotice, register, login, logout, loginWithGoogle]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,0 +1,86 @@
+/* src/pages/login/evergreen.css — the "Evergreen" sign-in page (src/pages/Login.jsx).
+   Everything is scoped under .rl-login so nothing leaks into the app. */
+.rl-login { --gold: #E9C46A; --gold-2: #C9961A; --pine: #0c3f38; --ivory: #F7F3EC; --navy: #000C66;
+  position: fixed; inset: 0; overflow: hidden; background: var(--ivory); color: #0B1240; font-family: "Nunito Sans", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+.rl-login *, .rl-login *::before, .rl-login *::after { box-sizing: border-box; }
+.rl-login .split { height: 100%; display: grid; grid-template-columns: 1.08fr 1fr; }
+
+/* ---------- Left panel ---------- */
+.rl-login .art { position: relative; overflow: hidden; color: #F6F2EA; isolation: isolate;
+  background: radial-gradient(70% 55% at 45% 32%, rgba(233,196,106,.16), transparent 70%), radial-gradient(90% 70% at 20% 10%, #155f55 0%, transparent 65%), linear-gradient(165deg, #0d433b, #04201b 75%); }
+.rl-login .art.plain { background: radial-gradient(80% 60% at 30% 20%, rgba(23,163,152,.22), transparent 70%), linear-gradient(165deg, #0a1478, #000a4f 70%); }
+.rl-login .art::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .45; background-image: radial-gradient(rgba(233,196,106,.16) 1px, transparent 1px); background-size: 22px 22px; }
+.rl-login .art::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0,0,0,.35)); }
+.rl-login canvas.snow { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; }
+.rl-login .orn { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+.rl-login .orn .hang { transform-box: fill-box; transform-origin: 50% 0; animation: rl-sway 6s ease-in-out infinite; }
+.rl-login .orn .hang:nth-of-type(2) { animation-duration: 7.2s; animation-delay: -2s; }
+.rl-login .orn .hang:nth-of-type(3) { animation-duration: 5.4s; animation-delay: -4s; }
+.rl-login .orn .hang:nth-of-type(4) { animation-duration: 6.6s; animation-delay: -1s; }
+.rl-login .orn .hang:nth-of-type(5) { animation-duration: 5.9s; animation-delay: -3s; }
+.rl-login .orn .tilt { transform-box: fill-box; transform-origin: 50% 0; transition: transform 1.4s cubic-bezier(.22,1,.36,1); }
+@keyframes rl-sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(2deg); } }
+.rl-login .draw { stroke-dasharray: var(--l, 600); stroke-dashoffset: var(--l, 600); animation: rl-draw 2.2s cubic-bezier(.65,0,.35,1) forwards; }
+@keyframes rl-draw { to { stroke-dashoffset: 0; } }
+.rl-login .fillin { opacity: 0; animation: rl-fill 1.4s ease forwards; }
+@keyframes rl-fill { to { opacity: 1; } }
+.rl-login .shine { animation: rl-shine 4.5s ease-in-out infinite; }
+@keyframes rl-shine { 0%, 100% { opacity: .35; } 50% { opacity: .85; } }
+.rl-login .spark { animation: rl-twinkle 2.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes rl-twinkle { 0%, 100% { opacity: .15; transform: scale(.55); } 50% { opacity: 1; transform: scale(1); } }
+.rl-login.lit .orn .ball { filter: brightness(1.35) drop-shadow(0 0 14px rgba(233,196,106,.65)); transition: filter .5s; }
+.rl-login .branches { position: absolute; left: 0; bottom: 0; width: 100%; height: 34%; z-index: 1; pointer-events: none; }
+.rl-login .brand { position: absolute; left: clamp(28px, 6vw, 72px); bottom: clamp(36px, 8vh, 80px); right: 28px; z-index: 3; }
+.rl-login .eyebrow { display: inline-flex; align-items: center; gap: 10px; color: var(--gold); font: 800 11px "Nunito Sans"; letter-spacing: .28em; text-transform: uppercase; opacity: 0; animation: rl-up 1s .8s cubic-bezier(.22,1,.36,1) forwards; }
+.rl-login .eyebrow::before { content: ""; width: 26px; height: 1px; background: var(--gold); }
+.rl-login .brand img { width: min(230px, 60%); display: block; margin-top: 16px; opacity: 0; transform: translateY(10px); animation: rl-up 1s .95s cubic-bezier(.22,1,.36,1) forwards; filter: drop-shadow(0 6px 18px rgba(0,0,0,.35)); }
+.rl-login .brand h2 { font: 300 clamp(32px, 3.6vw, 50px)/1.04 "League Spartan", sans-serif; letter-spacing: -.025em; margin: 18px 0 0; opacity: 0; transform: translateY(10px); animation: rl-up 1s 1.15s cubic-bezier(.22,1,.36,1) forwards; text-shadow: 0 2px 20px rgba(0,0,0,.25); }
+.rl-login .brand h2 b { font-weight: 700; background: linear-gradient(100deg, #E9C46A 20%, #fff3cf 45%, #E9C46A 70%); background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: rl-gilt 6s 2.4s ease-in-out infinite; }
+@keyframes rl-gilt { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0 0; } }
+.rl-login .brand p { margin: 12px 0 0; color: rgba(246,242,234,.75); font-size: 15px; max-width: 40ch; line-height: 1.55; opacity: 0; animation: rl-up 1s 1.35s cubic-bezier(.22,1,.36,1) forwards; }
+@keyframes rl-up { to { opacity: 1; transform: none; } }
+
+/* ---------- Right panel ---------- */
+.rl-login .side { display: grid; place-items: center; padding: 24px; position: relative; overflow: hidden;
+  background: radial-gradient(60% 45% at 100% 0%, rgba(233,196,106,.16), transparent 70%), radial-gradient(50% 40% at 0% 100%, rgba(12,63,56,.07), transparent 70%), var(--ivory); }
+.rl-login .sprig { position: absolute; right: -40px; top: -30px; width: 300px; opacity: .14; pointer-events: none; }
+.rl-login .sprig2 { position: absolute; left: -60px; bottom: -50px; width: 260px; opacity: .1; transform: rotate(160deg); pointer-events: none; }
+.rl-login .panel { width: min(400px, 100%); position: relative; opacity: 0; transform: translateX(14px); animation: rl-inR .9s .3s cubic-bezier(.22,1,.36,1) forwards; }
+@keyframes rl-inR { to { opacity: 1; transform: none; } }
+.rl-login .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rl-login .top img { width: 180px; display: block; }
+.rl-login .date { font: 800 11px "Nunito Sans"; letter-spacing: .14em; text-transform: uppercase; color: #8b8573; white-space: nowrap; }
+.rl-login .panel h1 { font: 500 34px/1.08 "League Spartan", sans-serif; letter-spacing: -.02em; margin: 40px 0 0; color: var(--navy); }
+.rl-login .panel h1 span { color: var(--gold-2); }
+.rl-login .sub { color: #5b6283; font-size: 15px; margin: 8px 0 0; line-height: 1.5; }
+.rl-login .google { position: relative; overflow: hidden; width: 100%; height: 54px; margin-top: 30px; border: 0; border-radius: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 12px;
+  color: #fff; font: 800 15.5px "Nunito Sans"; letter-spacing: .01em; background: linear-gradient(135deg, #0a1a8a, var(--navy)); box-shadow: 0 16px 30px -16px rgba(0,12,102,.75); transition: transform .15s, filter .2s; }
+.rl-login .google:hover { filter: brightness(1.1); }
+.rl-login .google:active { transform: translateY(1px) scale(.995); }
+.rl-login .google:disabled { cursor: default; filter: saturate(.7); }
+.rl-login .google .g { width: 30px; height: 30px; border-radius: 8px; background: #fff; display: grid; place-items: center; flex: none; }
+.rl-login .google::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(233,196,106,.45) 50%, transparent 70%); transform: translateX(-120%); }
+.rl-login .google:hover::after { transform: translateX(120%); transition: transform .8s; }
+.rl-login .google::before { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); opacity: .8; }
+.rl-login .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: rl-spin .7s linear infinite; }
+@keyframes rl-spin { to { transform: rotate(360deg); } }
+.rl-login .note { margin-top: 14px; display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: #5b6283; line-height: 1.5; }
+.rl-login .note svg { flex: none; margin-top: 2px; color: #0c6b5f; }
+.rl-login .msg { margin-top: 16px; padding: 12px 14px; border-radius: 12px; font-size: 13.5px; line-height: 1.45; background: #fdecea; color: #8a1c0e; border: 1px solid #f5c2b8; }
+.rl-login .msg.info { background: #eef4f2; color: #0c4a42; border-color: #cfe3de; }
+.rl-login .foot { margin-top: 34px; padding-top: 16px; border-top: 1px solid #E6E0D3; font-size: 12.5px; color: #8b8573; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rl-login .foot i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-left: 4px; }
+.rl-login .burst { position: fixed; pointer-events: none; z-index: 60; }
+.rl-login .burst i { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--gold); animation: rl-pop .9s cubic-bezier(.22,1,.36,1) forwards; }
+@keyframes rl-pop { from { transform: translate(0,0) scale(1); opacity: 1; } to { transform: translate(var(--x), var(--y)) scale(.2); opacity: 0; } }
+
+@media (max-width: 860px) {
+  .rl-login { overflow: auto; }
+  .rl-login .split { grid-template-columns: 1fr; grid-template-rows: 300px auto; height: auto; min-height: 100%; }
+  .rl-login .brand { bottom: 24px; } .rl-login .brand h2 { font-size: 30px; } .rl-login .brand p, .rl-login .brand img { display: none; }
+  .rl-login .side { padding: 32px 16px 48px; }
+  .rl-login .panel h1 { margin-top: 28px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rl-login *, .rl-login *::before, .rl-login *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; transition: none !important; }
+}

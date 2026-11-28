@@ -2,21 +2,19 @@
 // Users & roles (admins): add people, set what they can do, disable or remove access.
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment,
+  Alert, Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton,
   MenuItem, Snackbar, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography,
 } from "@mui/material";
 import EditRounded from "@mui/icons-material/EditRounded";
 import DeleteOutlineRounded from "@mui/icons-material/DeleteOutlineRounded";
-import LockResetRounded from "@mui/icons-material/LockResetRounded";
 import BlockRounded from "@mui/icons-material/BlockRounded";
 import CheckCircleOutlineRounded from "@mui/icons-material/CheckCircleOutlineRounded";
 import PersonAddAlt1Rounded from "@mui/icons-material/PersonAddAlt1Rounded";
-import ContentCopyRounded from "@mui/icons-material/ContentCopyRounded";
 import { useSearchParams } from "react-router-dom";
 import { collection, getDocs, doc, updateDoc } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
-import { sendPasswordResetEmail } from "firebase/auth";
-import db, { app, auth } from "../firebase";
+import { COMPANY_DOMAIN, isFirmEmail } from "../services/authService";
+import db, { app } from "../firebase";
 import { useAuth } from "../auth/useAuth";
 import { ROLE_LABELS, ROLE_HELP, roleOf, BYPASS_EMAIL } from "../auth/permissions";
 import { PageHeader, Section } from "../ui/kit";
@@ -71,22 +69,14 @@ export default function UserManagement() {
     setToast({ type: "success", msg: disabled ? "Access turned off." : "Access turned back on." });
   };
 
-  const resetPassword = async (r) => {
-    try {
-      await sendPasswordResetEmail(auth, r.email);
-      setToast({ type: "success", msg: `Password reset email sent to ${r.email}.` });
-    } catch (e) {
-      setToast({ type: "error", msg: e.message || "Could not send the email." });
-    }
-  };
-
   const sendInvite = async () => {
     if (!/\S+@\S+\.\S+/.test(invite.email)) return setToast({ type: "error", msg: "Enter a valid email." });
+    if (!isFirmEmail(invite.email)) return setToast({ type: "error", msg: `Only @${COMPANY_DOMAIN} emails can be added.` });
     setBusy(true);
     try {
       const { data } = await call("inviteUser", { name: invite.name, email: invite.email, role: invite.role });
       setRows((p) => [...p, { id: data.uid, name: invite.name, email: invite.email.toLowerCase(), role: invite.role, disabled: false, createdAt: new Date() }]);
-      setLink({ email: invite.email, url: data.setPasswordLink });
+      setLink({ email: invite.email.toLowerCase() });
       setInvite(null);
       if (params.get("invite")) setParams({}, { replace: true });
     } catch (e) {
@@ -167,11 +157,6 @@ export default function UserManagement() {
                             </IconButton>
                           </span>
                         </Tooltip>
-                        <Tooltip title="Email a password reset link">
-                          <IconButton size="small" onClick={() => resetPassword(r)}>
-                            <LockResetRounded fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
                         <Tooltip title={r.disabled ? "Turn access back on" : "Turn off access"}>
                           <span>
                             <IconButton size="small" disabled={self || isOwner(r)} onClick={() => toggleDisabled(r)}>
@@ -237,7 +222,7 @@ export default function UserManagement() {
               <TextField select label="Role" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })} helperText={ROLE_HELP[invite.role]} fullWidth>
                 {ROLE_OPTIONS.map((r) => <MenuItem key={r} value={r}>{ROLE_LABELS[r]}</MenuItem>)}
               </TextField>
-              <Alert severity="info" variant="outlined">You will get a link for them to set their password. Send it to them yourself.</Alert>
+              <Alert severity="info" variant="outlined">They sign in with their @{COMPANY_DOMAIN} Google account: no password to send. The role you pick applies from their first sign-in.</Alert>
             </Stack>
           )}
         </DialogContent>
@@ -251,21 +236,9 @@ export default function UserManagement() {
       <Dialog open={!!link} onClose={() => setLink(null)} maxWidth="sm" fullWidth>
         <DialogTitle>Account created</DialogTitle>
         <DialogContent dividers>
-          <Typography sx={{ mb: 2 }}>Send this link to <b>{link?.email}</b> so they can set their password and sign in:</Typography>
-          <TextField
-            value={link?.url || ""}
-            fullWidth
-            InputProps={{
-              readOnly: true,
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton onClick={() => navigator.clipboard.writeText(link.url).then(() => setToast({ type: "success", msg: "Link copied." }))}>
-                    <ContentCopyRounded />
-                  </IconButton>
-                </InputAdornment>
-              ),
-            }}
-          />
+          <Typography>
+            <b>{link?.email}</b> can sign in now: open Collections and click <b>Sign in with Google</b> with that account. There is no password to send.
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button variant="contained" onClick={() => setLink(null)}>Done</Button>

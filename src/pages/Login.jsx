@@ -1,317 +1,208 @@
 // src/pages/Login.jsx
-import React, { useState } from "react";
+// Sign-in page ("Evergreen"): Google sign-in only, firm accounts only (@rahmanlawpllc.com:
+// src/services/authService.js asks Google for firm accounts and checks the address, and
+// src/auth/AuthProvider.jsx signs out any other account).
+// Left: the firm panel. From Nov 24 to Jan 6 it wears the holiday look (garland, glass
+// ornaments that lean toward the mouse, gold snow, pine boughs); the rest of the year the
+// same layout shows in navy without them. Right: greeting by time of day and the button.
+// Styles: ./login/evergreen.css. Motion stops for people who turned on "reduce motion".
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Box,
-  Paper,
-  Typography,
-  TextField,
-  Button,
-  Link,
-  Stack,
-  Alert,
-  CircularProgress,
-  IconButton,
-  InputAdornment,
-  Grow,
-  GlobalStyles,
-  Divider,
-} from "@mui/material";
-import Visibility from "@mui/icons-material/Visibility";
-import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import { useAuth } from "../auth/useAuth";
-import GoogleIcon from "@mui/icons-material/Google";
+import { COMPANY_DOMAIN } from "../services/authService";
+import logo from "../assets/rahman-law-logo.svg";
+import logoGold from "../assets/rahman-law-logo-gold.svg";
+import Ornaments, { Sprig, boughPaths } from "./login/Ornaments";
+import "./login/evergreen.css";
 
-// ✅ Assets
-import loginBg from "../assets/login-bg.png";
-import verticalLogo from "../assets/Vertical Logo ENG.png";
+/** Holiday look: November 24 through January 6. */
+export function isHolidaySeason(d = new Date()) {
+  const m = d.getMonth();
+  const day = d.getDate();
+  return (m === 10 && day >= 24) || m === 11 || (m === 0 && day <= 6);
+}
+
+const GoogleG = () => (
+  <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
+    <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+    <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+    <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
+  </svg>
+);
+
+/** Slow gold snow on a canvas (holiday look only). */
+function useSnow(ref, on) {
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!on || !canvas || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
+    const ctx = canvas.getContext("2d");
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    let w = 0;
+    let h = 0;
+    let raf = 0;
+    let flakes = [];
+    const make = (y) => {
+      const r = 0.6 + Math.random() * 2;
+      return { x: Math.random() * w, y: y ?? Math.random() * h, r, vy: 0.32 * (0.4 + r / 2), a: (0.25 + Math.random() * 0.55) * 0.6, p: Math.random() * 6.28 };
+    };
+    const size = () => {
+      w = canvas.clientWidth;
+      h = canvas.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    const frame = (t) => {
+      if (canvas.clientWidth !== w || canvas.clientHeight !== h) {
+        const was = w;
+        size();
+        if (!was) flakes = flakes.map(() => make());
+      }
+      ctx.clearRect(0, 0, w, h);
+      for (const f of flakes) {
+        f.y += f.vy;
+        f.x += Math.sin(t / 1800 + f.p) * 0.35;
+        if (f.y > h + 4) Object.assign(f, make(-4));
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.r, 0, 6.283);
+        ctx.fillStyle = `rgba(233,196,106,${f.a})`;
+        ctx.fill();
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    size();
+    flakes = Array.from({ length: 55 }, () => make());
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [ref, on]);
+}
 
 export default function Login() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const { login, loginWithGoogle } = useAuth();
+  const { loginWithGoogle, disabledNotice, domainNotice } = useAuth();
   const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [lit, setLit] = useState(false);
+  const [burst, setBurst] = useState(null);
+  const artRef = useRef(null);
+  const snowRef = useRef(null);
+  const btnRef = useRef(null);
+  const holiday = useMemo(() => isHolidaySeason(), []);
+  const boughs = useMemo(() => (holiday ? boughPaths() : []), [holiday]);
+  useSnow(snowRef, holiday);
 
-  async function handleGoogleLogin() {
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const today = now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+
+  // Ornaments lean gently toward the mouse, each by its own depth.
+  useEffect(() => {
+    const art = artRef.current;
+    if (!holiday || !art || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
+    const tilts = [...art.querySelectorAll(".tilt")];
+    const move = (e) => {
+      const r = art.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width - 0.5;
+      tilts.forEach((t) => (t.style.transform = `rotate(${(-x * 7 * Number(t.dataset.depth)).toFixed(2)}deg)`));
+    };
+    const leave = () => tilts.forEach((t) => (t.style.transform = ""));
+    art.addEventListener("pointermove", move);
+    art.addEventListener("pointerleave", leave);
+    return () => {
+      art.removeEventListener("pointermove", move);
+      art.removeEventListener("pointerleave", leave);
+    };
+  }, [holiday]);
+
+  async function signIn() {
     setError("");
-    setSubmitting(true);
+    setBusy(true);
     try {
       await loginWithGoogle();
-      navigate("/dashboard", { replace: true });
+      // A small gold sparkle off the button, and the ornaments glow.
+      setLit(true);
+      const b = btnRef.current && btnRef.current.getBoundingClientRect();
+      if (b) setBurst({ x: b.left + b.width / 2, y: b.top + b.height / 2 });
+      setTimeout(() => navigate("/dashboard", { replace: true }), holiday ? 650 : 0);
     } catch (err) {
-      console.error("Google login error:", err);
-      setError(err.message || "Google sign-in failed. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError("");
-    setSubmitting(true);
-    try {
-      await login(email.trim().toLowerCase(), password);
-      navigate("/dashboard", { replace: true });
-    } catch (err) {
-      console.error("Login error:", err);
-      setError("Invalid email or password. Please try again.");
-    } finally {
-      setSubmitting(false);
+      const code = String((err && err.code) || "");
+      if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") setError("");
+      else if (code === "auth/popup-blocked") setError("Your browser blocked the Google window. Allow pop-ups for this site and try again.");
+      else setError(err && err.message ? err.message : "Google sign-in failed. Please try again.");
+      setBusy(false);
     }
   }
 
   return (
-    <Box
-      sx={{
-        width: "100vw",
-        height: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundImage: `linear-gradient(
-          rgba(11, 24, 48, 0.65),
-          rgba(0, 0, 0, 0.65)
-        ), url(${loginBg})`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundRepeat: "no-repeat",
-      }}
-    >
-      {/* ✅ Fix autofill styling globally */}
-      <GlobalStyles
-        styles={{
-          "input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus, textarea:-webkit-autofill, select:-webkit-autofill":
-            {
-              WebkitTextFillColor: "#fff",
-              WebkitBoxShadow:
-                "0 0 0px 1000px rgba(255,255,255,0.08) inset !important",
-              transition: "background-color 9999s ease-in-out 0s",
-              caretColor: "#fff",
-            },
-        }}
-      />
-
-      <Grow in timeout={500}>
-        <Paper
-          elevation={8}
-          sx={{
-            width: 420,
-            maxWidth: "92vw",
-            p: 4,
-            borderRadius: 3,
-            background: "rgba(255, 255, 255, 0.08)",
-            backdropFilter: "blur(12px)",
-            border: "2px solid transparent",
-            backgroundClip: "padding-box",
-            position: "relative",
-            color: "#fff",
-            boxShadow: "0 8px 40px rgba(0, 0, 0, 0.35)",
-            "&::before": {
-              content: '""',
-              position: "absolute",
-              inset: 0,
-              borderRadius: 3,
-              padding: "2px",
-              background:
-                "linear-gradient(135deg, #000C66 0%, #17A398 50%, #D34E24 100%)",
-              WebkitMask:
-                "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",
-              WebkitMaskComposite: "xor",
-              maskComposite: "exclude",
-              pointerEvents: "none",
-            },
-          }}
-        >
-          {/* Brand */}
-          <Stack alignItems="center" spacing={2} sx={{ mb: 2 }}>
-            <Box
-              component="img"
-              src={verticalLogo}
-              alt="Rahman Law Vertical Logo"
-              sx={{
-                width: 120,
-                height: "auto",
-                objectFit: "contain",
-                filter:
-                  "brightness(1.3) drop-shadow(0 0 10px rgba(255,255,255,0.6))",
-              }}
-            />
-
-            <Typography
-              variant="h6"
-              fontWeight={700}
-              sx={{
-                letterSpacing: 0.5,
-                color: "#ffffff",
-                textAlign: "center",
-                mt: 1,
-              }}
-            >
-              Sign in to your account
-            </Typography>
-            <Typography
-              variant="body2"
-              sx={{
-                color: "rgba(255,255,255,0.8)",
-                textAlign: "center",
-                mb: 1,
-              }}
-            >
-              Access Rahman Law Collections
-            </Typography>
-          </Stack>
-
-          {error && (
-            <Alert severity="error" sx={{ mt: 1, mb: 2 }}>
-              {error}
-            </Alert>
+    <div className={`rl-login${lit ? " lit" : ""}`}>
+      <div className="split">
+        <section className={`art${holiday ? "" : " plain"}`} ref={artRef}>
+          {holiday && <canvas className="snow" ref={snowRef} />}
+          {holiday && <Ornaments />}
+          {holiday && (
+            <svg className="branches" viewBox="0 0 600 260" preserveAspectRatio="xMaxYMax slice" fill="none" stroke="#E9C46A" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
+              {boughs.map((b) => <path key={b.d.slice(0, 24)} className="draw" d={b.d} opacity=".55" style={{ "--l": 4000, animationDelay: `${b.delay}s`, animationDuration: "3s" }} />)}
+            </svg>
           )}
+          <div className="brand">
+            <div className="eyebrow">{holiday ? `Happy holidays ${now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear()}` : "Rahman Law · Collections"}</div>
+            <img src={logoGold} alt="Moumita Rahman Immigration Attorneys" />
+            {holiday ? (
+              <>
+                <h2>Season's greetings<br />from <b>Rahman Law</b></h2>
+                <p>Thank you for everything you did for our clients this year.</p>
+              </>
+            ) : (
+              <>
+                <h2>Billing, plans and<br /><b>follow-ups</b> in one place</h2>
+                <p>Every payment from MyCase, every plan and every call, for the whole team.</p>
+              </>
+            )}
+          </div>
+        </section>
 
-          {/* Google SSO */}
-          <Button
-            fullWidth
-            variant="outlined"
-            startIcon={<GoogleIcon />}
-            onClick={handleGoogleLogin}
-            disabled={submitting}
-            sx={{
-              mb: 2,
-              color: "#fff",
-              borderColor: "rgba(255,255,255,0.35)",
-              textTransform: "none",
-              fontWeight: 600,
-              "&:hover": {
-                borderColor: "#fff",
-                backgroundColor: "rgba(255,255,255,0.08)",
-              },
-            }}
-          >
-            Sign in with Google
-          </Button>
+        <section className="side">
+          {holiday && <Sprig className="sprig" color="#0c3f38" berries />}
+          {holiday && <Sprig className="sprig2" color="#C9961A" />}
+          <div className="panel">
+            <div className="top">
+              <img src={logo} alt="Rahman Law" />
+              <span className="date">{today}</span>
+            </div>
+            <h1>{greeting}<span>.</span></h1>
+            <p className="sub">Sign in to Collections with your Rahman Law Google account.</p>
 
-          <Divider sx={{ mb: 2, borderColor: "rgba(255,255,255,0.2)" }}>
-            <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.5)", px: 1 }}>
-              or sign in with email
-            </Typography>
-          </Divider>
+            <button ref={btnRef} type="button" className="google" onClick={signIn} disabled={busy}>
+              {busy ? <span className="spin" /> : <span className="g"><GoogleG /></span>}
+              {busy ? "Signing in…" : "Sign in with Google"}
+            </button>
+            <div className="note">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
+              <span>Only @{COMPANY_DOMAIN} accounts can sign in. Need access? Ask an admin to add you in Users &amp; roles.</span>
+            </div>
 
-          <Box component="form" onSubmit={handleSubmit} noValidate autoComplete="off">
-            <Stack spacing={2}>
-              <TextField
-                label="Email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="email"
-                required
-                fullWidth
-                size="medium"
-                InputLabelProps={{ style: { color: "#fff" } }}
-                InputProps={{
-                  style: { color: "#fff" },
-                }}
-                sx={{
-                  "& .MuiOutlinedInput-root": {
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    "& fieldset": {
-                      borderColor: "rgba(255,255,255,0.25)",
-                    },
-                    "&:hover fieldset": {
-                      borderColor: "rgba(255,255,255,0.4)",
-                    },
-                    "&.Mui-focused fieldset": {
-                      borderColor: "#17A398",
-                    },
-                  },
-                }}
-              />
+            {error && <div className="msg" role="alert">{error}</div>}
+            {!error && domainNotice && <div className="msg" role="alert">That Google account isn't a Rahman Law account. Sign in with your @{COMPANY_DOMAIN} email.</div>}
+            {!error && disabledNotice && <div className="msg info" role="alert">Your access to Collections is turned off. Ask an admin if you need it back.</div>}
 
-              <TextField
-                label="Password"
-                type={showPw ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                required
-                fullWidth
-                size="medium"
-                InputLabelProps={{ style: { color: "#fff" } }}
-                InputProps={{
-                  style: { color: "#fff" },
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton
-                        aria-label={showPw ? "Hide password" : "Show password"}
-                        onClick={() => setShowPw((s) => !s)}
-                        edge="end"
-                        sx={{ color: "#fff" }}
-                      >
-                        {showPw ? <VisibilityOff /> : <Visibility />}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-                sx={{
-                  "& .MuiOutlinedInput-root": {
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    "& fieldset": {
-                      borderColor: "rgba(255,255,255,0.25)",
-                    },
-                    "&:hover fieldset": {
-                      borderColor: "rgba(255,255,255,0.4)",
-                    },
-                    "&.Mui-focused fieldset": {
-                      borderColor: "#17A398",
-                    },
-                  },
-                }}
-              />
-
-              <Stack
-                direction="row"
-                alignItems="center"
-                justifyContent="space-between"
-              >
-                <Link
-                  component="button"
-                  variant="body2"
-                  onClick={() => navigate("/forgot-password")}
-                  sx={{ color: "#fff", opacity: 0.8, textTransform: "none" }}
-                >
-                  Forgot password?
-                </Link>
-                <Button
-                  type="submit"
-                  variant="contained"
-                  disabled={submitting}
-                  sx={{
-                    minWidth: 120,
-                    textTransform: "none",
-                    fontWeight: 700,
-                    px: 3,
-                    bgcolor: "#17A398",
-                    "&:hover": { bgcolor: "#008f81" },
-                  }}
-                >
-                  {submitting ? (
-                    <Stack direction="row" gap={1} alignItems="center">
-                      <CircularProgress size={18} color="inherit" />
-                      <span>Signing in…</span>
-                    </Stack>
-                  ) : (
-                    "Login"
-                  )}
-                </Button>
-              </Stack>
-            </Stack>
-          </Box>
-        </Paper>
-      </Grow>
-    </Box>
+            <div className="foot">
+              <span>{holiday ? "Happy holidays from the Rahman Law team" : "Moumita Rahman Immigration Attorneys"}</span>
+              <span><i style={{ background: "#D34E24" }} /><i style={{ background: "#E9C46A" }} /><i style={{ background: "#17A398" }} /></span>
+            </div>
+          </div>
+        </section>
+      </div>
+      {burst && (
+        <div className="burst" style={{ left: burst.x, top: burst.y }}>
+          {Array.from({ length: 18 }, (_, i) => {
+            const a = (i / 18) * Math.PI * 2;
+            const r = 50 + ((i * 37) % 40);
+            return <i key={i} style={{ "--x": `${Math.cos(a) * r}px`, "--y": `${Math.sin(a) * r}px`, background: ["#E9C46A", "#D34E24", "#17A398"][i % 3] }} />;
+          })}
+        </div>
+      )}
+    </div>
   );
 }

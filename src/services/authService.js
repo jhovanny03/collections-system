@@ -38,7 +38,10 @@ import {
 } from "firebase/auth";
 import { auth } from "../firebase";
 
-const COMPANY_DOMAIN = "rahmanlawpllc.com";
+// Only firm Google accounts can use the app (sign-in page, AuthProvider and the server
+// functions all check it).
+export const COMPANY_DOMAIN = "rahmanlawpllc.com";
+export const isFirmEmail = (email) => String(email || "").trim().toLowerCase().endsWith(`@${COMPANY_DOMAIN}`);
 
 export const authService = {
   register: (email, password) =>
@@ -54,9 +57,9 @@ export const authService = {
     provider.setCustomParameters({ hd: COMPANY_DOMAIN });
     const result = await signInWithPopup(auth, provider);
     const email = (result.user.email || "").toLowerCase();
-    if (!email.endsWith(`@${COMPANY_DOMAIN}`)) {
+    if (!isFirmEmail(email)) {
       await signOut(auth);
-      throw new Error("Only @rahmanlawpllc.com accounts are allowed.");
+      throw new Error(`That Google account isn't a Rahman Law account. Sign in with your @${COMPANY_DOMAIN} email.`);
     }
     return result;
   },

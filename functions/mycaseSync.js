@@ -85,7 +85,9 @@ function defaultInvoiceRole(inv) {
 
 /**
  * Computed fields stored on a mirrored case.
- *   needsSetup  open, owes money, not in Collections: billing sets it up on Case Setup
+ *   needsSetup  open, not in Collections, and either owes money, or is a new intake case
+ *               (opened in the last 180 days) that paid its initial and has no monthly-plan
+ *               invoice yet (setupReason "paidNoPlan"): billing sets it up on Case Setup
  *   autoCreate  a new intake case (initial-payment invoice only): the sync creates it
  *   needsPlan   in Collections but still waiting for billing's monthly plan
  * trackedClients: the client records pointing at this case (or just their ids).
@@ -178,7 +180,7 @@ function initialFlags(caseDoc, invoices, onlyClient, tracked) {
   return { initialState: state, initialDue: due, initialTotal: cents(inv.total) / 100, initialPaid: paid, initialInvoiceId: String(inv.id), initialDate: inv.invoiceDate || null, initialService: service && service !== "Main case" ? service : null, initialCreatedBy: inv.createdBy || null };
 }
 
-function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
+function caseFlags(caseDoc, invoices, trackedClients = [], payments = null, now = new Date()) {
   const openBalanceCents = invoices
     .filter((i) => i.status !== "draft")
     .reduce((s, i) => s + Math.max(0, cents(i.total) - cents(i.paid)), 0);
@@ -194,11 +196,20 @@ function caseFlags(caseDoc, invoices, trackedClients = [], payments = null) {
   const paidInFull = caseDoc.flatFee > 0 ? paidCents >= cents(caseDoc.flatFee) && openBalanceCents === 0 : false;
   // The initial-payment invoice's date: billing's welcome call is due 7 days after it.
   const ipInvoice = only || !trackedClients.length ? initialInvoiceOf(invoices, only) : null;
+  // A new intake case that paid its initial in full and has no monthly-plan invoice yet owes
+  // nothing for now, but still has to be brought into Collections (its payments count only
+  // then). Cases from before AUTO_CREATE_FROM are not created on their own.
+  const opened = isYMD(caseDoc.openedDate) ? new Date(`${caseDoc.openedDate}T12:00:00`) : null;
+  const recent = !!opened && now - opened <= 180 * 864e5;
+  const paidNoPlan = open && !tracked && !dismissed && !autoCreate && openBalanceCents === 0 && paidCents > 0 && !paidInFull
+    && recent && setupGroup(caseDoc) === "client" && invoices.some((i) => i.status !== "draft" && cents(i.paid) > 0 && !isConsultFee(i));
+  const needsSetup = open && !tracked && !autoCreate && !dismissed && (openBalanceCents > 0 || paidNoPlan);
   return {
     openBalance: openBalanceCents / 100,
     invoiceCount: invoices.filter((i) => i.status !== "draft").length,
     trackedClientId: tracked,
-    needsSetup: open && openBalanceCents > 0 && !tracked && !autoCreate && !dismissed,
+    needsSetup,
+    setupReason: needsSetup ? (openBalanceCents > 0 ? "unpaid" : "paidNoPlan") : null,
     autoCreate,
     needsPlan: open && !!(only && only.awaitingPlan) && !paidInFull,
     paidInFull,

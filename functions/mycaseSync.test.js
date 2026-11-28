@@ -352,3 +352,17 @@ test("an initial payment split over two invoices is added up", () => {
   assert.equal(f.initialDue, 1500);
   assert.equal(f.initialInvoiceId, "2");
 });
+
+test("a new intake case that paid its initial and has no plan invoice yet still needs setup", () => {
+  const now = new Date(2026, 10, 27);
+  const fresh = { id: "9", status: "open", name: "A (10-26) X, Y (T-VISA)", openedDate: "2026-10-01" };
+  const ip = inv({ caseId: "9", total: 3000, paid: 3000, balance: 0 });
+  const f = caseFlags(fresh, [ip], [], null, now);
+  assert.equal(f.needsSetup, true);
+  assert.equal(f.setupReason, "paidNoPlan");
+  assert.equal(caseFlags({ ...fresh, openedDate: "2025-01-10" }, [ip], [], null, now).needsSetup, false); // old case: done, not new intake
+  assert.equal(caseFlags(fresh, [ip], ["c1"], null, now).needsSetup, false); // already in Collections
+  assert.equal(caseFlags({ ...fresh, name: "Potential Case: X" }, [ip], [], null, now).needsSetup, false);
+  assert.equal(caseFlags(fresh, [inv({ caseId: "9", paid: 1000 })], [], null, now).setupReason, "unpaid");
+  assert.equal(caseFlags(fresh, [inv({ caseId: "9", total: 150, paid: 150, balance: 0 })], [], null, now).needsSetup, false); // consultation only
+});

@@ -329,7 +329,7 @@ const JOBS = [
   { key: "plan", label: "Welcome calls and plans", color: "error",
     what: ["Already in Collections — needs its monthly plan", "Intake created the initial-payment invoice in MyCase, so the client was added to Collections automatically. Billing makes the welcome call within 7 days of that invoice and, once the installment invoice is in MyCase, adds the monthly plan here."] },
   { key: "setup", label: "New MyCase cases", color: "primary",
-    what: ["Not in Collections yet — needs to be set up", "Open MyCase cases with an unpaid balance that nobody has brought into Collections. Tag their invoices to create the client (its MyCase payments come in on their own), or mark it \"Not a client\" if it was terminated or never signed."] },
+    what: ["Not in Collections yet — needs to be set up", "Open MyCase cases that nobody has brought into Collections: cases with an unpaid balance, and new intake cases that paid their initial but have no monthly-plan invoice yet (marked \"Initial paid · no plan invoice yet\"; until they are set up, their payments don't count anywhere). Tag their invoices to create the client (its MyCase payments come in on their own), or mark it \"Not a client\" if it was terminated or never signed."] },
   { key: "retag", label: "Existing clients to tag", color: "warning",
     what: ["In Collections — invoices the sync couldn't identify", "Clients already in Collections whose MyCase invoices don't match their plan (for example a removal-defense invoice, or amounts that differ). Until tagged, their hand-entered payments are kept and nothing is guessed."] },
   { key: "links", label: "Link problems", color: "secondary",
@@ -432,7 +432,11 @@ export default function CaseSetup() {
       (snap) => setCases(snap.docs.map((d) => d.data()).sort(tab === "plan"
         // Waiting for a plan: oldest initial-payment invoice first (welcome call due 7 days after it).
         ? (a, b) => String(a.ipInvoiceDate || a.openedDate || "").localeCompare(String(b.ipInvoiceDate || b.openedDate || ""))
-        : (a, b) => (b.openBalance || 0) - (a.openBalance || 0))),
+        // New cases: intake cases that paid and have no plan invoice first (their money counts
+        // nowhere until set up, oldest first), then the biggest balances.
+        : (a, b) => (b.setupReason === "paidNoPlan") - (a.setupReason === "paidNoPlan")
+          || (a.setupReason === "paidNoPlan" ? String(a.openedDate || "").localeCompare(String(b.openedDate || "")) : 0)
+          || (b.openBalance || 0) - (a.openBalance || 0))),
       (e) => { console.error(e); setError("Could not load cases. You may not have access."); setCases([]); }
     );
   }, [tab, showRemoved]);
@@ -585,6 +589,7 @@ export default function CaseSetup() {
                   </Typography>
                   <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
                     {w && pill(w.label, w.left < 0 ? "error" : w.left <= 2 ? "warning" : null)}
+                    {tab === "setup" && c.setupReason === "paidNoPlan" && pill("Initial paid · no plan invoice yet", "warning")}
                     {c.practiceArea && pill(c.practiceArea)}
                     {c.caseStage && pill(`MyCase: ${c.caseStage}`)}
                     {tab === "plan" && c.flatFee > 0 && pill(c.uninvoicedFee > 0 ? `${money(c.uninvoicedFee)} not invoiced yet` : `Flat fee ${money(c.flatFee)} · fully invoiced`)}
@@ -598,7 +603,7 @@ export default function CaseSetup() {
                   {c.openBalance > 0 ? (
                     <Typography sx={{ font: `700 18px ${FONT_HEADING}` }}>{money(c.openBalance)}</Typography>
                   ) : (
-                    <Typography variant="caption" color="text.secondary" fontWeight={800}>Nothing open in MyCase</Typography>
+                    <Typography variant="caption" color="text.secondary" fontWeight={800}>{c.setupReason === "paidNoPlan" ? "Nothing owed until the plan invoice" : "Nothing open in MyCase"}</Typography>
                   )}
                   <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center" useFlexGap flexWrap="wrap">
                     {showRemoved && tab === "setup" ? (

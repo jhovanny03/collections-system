@@ -844,11 +844,19 @@ exports.importMyCasePayments = onSchedule(
 /* Callable only by editor / admin / master (same roles as the Follow Ups page). */
 const MASTER_EMAIL = "jhovanny@rahmanlawpllc.com";
 
-async function requireEditor(context) {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Sign in required.");
-  }
+// Only firm Google accounts use the app (same rule as src/services/authService.js).
+const COMPANY_DOMAIN = "rahmanlawpllc.com";
+function requireFirmAccount(context) {
+  if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Sign in required.");
   const email = String(context.auth.token.email || "").toLowerCase();
+  if (!email.endsWith(`@${COMPANY_DOMAIN}`) || context.auth.token.email_verified === false) {
+    throw new functions.https.HttpsError("permission-denied", `Only @${COMPANY_DOMAIN} accounts can use Collections.`);
+  }
+  return email;
+}
+
+async function requireEditor(context) {
+  const email = requireFirmAccount(context);
   let allowed = email === MASTER_EMAIL;
   if (!allowed) {
     const prof = (await appDb().doc(`users/${context.auth.uid}`).get()).data() || {};
@@ -862,8 +870,7 @@ async function requireEditor(context) {
 }
 
 async function requireAdmin(context) {
-  if (!context.auth) throw new functions.https.HttpsError("unauthenticated", "Sign in required.");
-  const email = String(context.auth.token.email || "").toLowerCase();
+  const email = requireFirmAccount(context);
   if (email === MASTER_EMAIL) return email;
   const prof = (await appDb().doc(`users/${context.auth.uid}`).get()).data() || {};
   if (prof.disabled === true || !["admin", "master"].includes(String(prof.role || "").toLowerCase())) {
@@ -885,10 +892,13 @@ exports.inviteUser = functions.https.onCall(async (data, context) => {
   const name = String((data && data.name) || "").trim();
   const role = String((data && data.role) || "basic").toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new functions.https.HttpsError("invalid-argument", "Enter a valid email.");
+  if (!email.endsWith(`@${COMPANY_DOMAIN}`)) throw new functions.https.HttpsError("invalid-argument", `Only @${COMPANY_DOMAIN} emails can be added.`);
   if (!USER_ROLES.includes(role)) throw new functions.https.HttpsError("invalid-argument", "Unknown role.");
   let user;
   try {
-    user = await admin.auth().createUser({ email, displayName: name || undefined, password: require("crypto").randomBytes(18).toString("base64url") });
+    // No password: people sign in with their firm Google account, which takes over this
+    // account (same email), so the role set here applies from their first sign-in.
+    user = await admin.auth().createUser({ email, displayName: name || undefined });
   } catch (e) {
     if (e.code === "auth/email-already-exists") throw new functions.https.HttpsError("already-exists", "A user with this email already exists.");
     throw new functions.https.HttpsError("internal", e.message);
@@ -898,8 +908,7 @@ exports.inviteUser = functions.https.onCall(async (data, context) => {
     email, name, firstName: firstName || "", lastName: rest.join(" "), role, disabled: false,
     onboardingCompleted: false, createdAt: admin.firestore.FieldValue.serverTimestamp(), invitedBy: by,
   });
-  const setPasswordLink = await admin.auth().generatePasswordResetLink(email);
-  return { uid: user.uid, setPasswordLink };
+  return { uid: user.uid, email };
 });
 
 /** Users & roles: remove a person's account (profile and sign-in). Not yourself. */

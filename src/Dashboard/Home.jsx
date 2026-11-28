@@ -153,6 +153,10 @@ export default function Home() {
   const aging = s.buckets || [];
   const agingCols = agingColors(theme);
   const initialTrend = (byMonth || []).map((m) => m.initial || 0);
+  // Intake money MyCase received this month on new cases not set up in Collections yet
+  // (counted once set up), and the removal-defense part of initial payments.
+  const newCaseMoney = (mycaseMonth && mycaseMonth.newCases) || null;
+  const removalInitial = (s.collected.mtdInitialRemoval || 0) + ((newCaseMoney && newCaseMoney.removal) || 0);
 
   const listCard = (items, render, empty) => (items.length === 0 ? empty : <List dense disablePadding>{items.map(render)}</List>);
   const avatar = (name, tone = "primary") => (
@@ -356,13 +360,23 @@ export default function Home() {
           label="Initial payments"
           value={money(s.collected.mtdInitial || 0)}
           sub={`this month (intake) · ${s.initialUnpaid.clients} not completed (${kfmt(s.initialUnpaid.amount)})`}
-          help="Initial payments received this month. They are the intake team's and are not in Collected this month. The line: initial payments each of the last 12 months."
+          help="Initial payments received this month on clients in Collections. They are not in Collected this month. Below: money MyCase received on new cases not set up in Collections yet (it counts here once Case Setup brings them in), and the removal-defense part, often sold outside the intake team (removal-defense cases, or a removal-defense service added to an existing client). The line: initial payments each of the last 12 months."
           icon={<AccountBalanceWalletRounded />}
           color="#C9961A"
           to="/initial-payments"
           loading={loading}
         >
           <Spark values={initialTrend} color="#C9961A" />
+          {!loading && newCaseMoney && newCaseMoney.amount > 0 && (
+            <Typography variant="caption" component="div" sx={{ mt: 0.75, fontWeight: 800, color: "warning.dark", lineHeight: 1.35 }}>
+              + {money(newCaseMoney.amount)} on {newCaseMoney.cases} new case{newCaseMoney.cases === 1 ? "" : "s"} not set up yet
+            </Typography>
+          )}
+          {!loading && removalInitial > 0 && (
+            <Box sx={{ mt: 0.5, display: "inline-flex", alignItems: "center", gap: 0.75, px: 1, py: 0.25, borderRadius: 99, bgcolor: alpha("#7B4BC4", 0.12), color: "#7B4BC4", fontSize: 11.5, fontWeight: 800 }}>
+              Removal defense {money(removalInitial)}
+            </Box>
+          )}
         </Kpi>
       </Box>
 

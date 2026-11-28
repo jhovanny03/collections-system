@@ -71,7 +71,8 @@ function ThemeAndRoutes() {
   const navigate = useNavigate();
 
   const isLoginPage = location.pathname === "/login";
-  const isStandalonePage = ["/login", "/welcome", "/action", "/forgot-password"].includes(
+  // /login-preview: the sign-in page without the signed-in redirect, local dev only.
+  const isStandalonePage = ["/login", "/login-preview", "/welcome", "/action", "/forgot-password"].includes(
     location.pathname
   );
   const inLayout = !isStandalonePage && location.pathname !== "/onboarding";
@@ -167,6 +168,7 @@ function ThemeAndRoutes() {
         >
           <Routes>
               <Route path="/login" element={<Login />} />
+              {process.env.NODE_ENV === "development" && <Route path="/login-preview" element={<Login />} />}
               <Route path="/welcome" element={<Welcome />} />
               <Route path="/action" element={<ActionHandler />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
